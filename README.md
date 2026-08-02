@@ -8,7 +8,36 @@ offline use is tested. This repository is the resolver, the store, and the
 verification discipline built on top — and the decisions it makes are the point
 of it.
 
-## Five decisions, each with what it costs
+## kpm is one file
+
+The language's CLI framework writes a Linux x86-64 ELF **directly** — no C
+compiler, no assembler, no linker and no shell in the application build, and
+no libc or dynamic loader at run time. Measured, and asserted by the gate on
+every run:
+
+```
+size: 4721 bytes
+ELF 64-bit LSB executable, x86-64, statically linked
+not a dynamic executable
+```
+
+That matters more for a package manager than for most tools. It is the first
+thing a person installs and the thing they install everything else with; one
+that is a single dependency-free file can be fetched by digest, mirrored
+anywhere, and run on a machine with nothing else on it. Compare what the
+alternatives need before they can resolve one dependency: cargo is a
+multi-megabyte toolchain component, npm needs a Node runtime, bun ships around
+ninety megabytes.
+
+**The commands are not bound yet.** `contracts/kpm-cli.kofun` declares the
+surface and the gate requires it to keep failing at the compiler boundary,
+because the framework's action set is four fixed contracts and its reference
+says so plainly. The restriction is tighter than it reads: an action fixes its
+option *names*, so a surface cannot be declared even around placeholder
+actions. That is issue #7. This repository does not ship a CLI whose commands
+do nothing.
+
+## Six decisions, each with what it costs
 
 A package is identified by **where it lives** — a URL, as in Go. There is no
 registry and none is planned; the question "who owns this name" has the same
@@ -16,7 +45,24 @@ answer as "who controls this host". [ADR 3](docs/adr/0003-url-identity.md)
 records what that costs, including the one it does not solve: revocation has
 nowhere to live.
 
-### 1. Minimal version selection, not a solver
+### 1. Semantic versioning, with the major in the identity
+
+`major.minor.patch`, and a major bump changes where the package lives — Go's
+answer, which falls out of URL identity rather than being bolted on.
+
+This is needed because **semver alone does not stop MVS**. Given `>= 1.5.0`
+and `>= 2.0.0` the maximum is `2.0.0`, and MVS would hand that to the package
+that asked for `1.5.0` — precisely the breaking change the major bump was
+announcing. Putting the major in the identity means the resolver never
+compares them, so it stays a maximum instead of growing a compatibility mode.
+
+**The cost:** a major bump is a rename and is felt as one. Every dependent
+edits its manifest to move. Under MVS the alternative is not less friction but
+a silent upgrade across a boundary the author declared.
+[ADR 5](docs/adr/0005-semver-with-the-major-in-the-identity.md), including why
+`0.x` needs its own decision.
+
+### 2. Minimal version selection, not a solver
 
 npm and Cargo resolve by search: a solver explores the version space, and when
 it fails you get a conflict report that requires understanding the solver.
@@ -32,7 +78,7 @@ exactly what `seed/resolver/` does.
 project does not silently drift onto a newer dependency the day it is
 published. That is a cost only if you wanted the drift.
 
-### 2. One copy on disk, addressed by content
+### 3. One copy on disk, addressed by content
 
 pnpm's insight: a package version is immutable, so its bytes are its name.
 Every artifact lands in a store under its `sha256`, and a project's dependency
@@ -46,7 +92,7 @@ promised" a question you can answer without a network.
 `kpm verify` is that check, and it is a gate rather than a subcommand nobody
 runs.
 
-### 3. A build output is named by its complete inputs
+### 4. A build output is named by its complete inputs
 
 Go stops at fetch reproducibility: `go.sum` pins the bytes that arrived, and
 what happens next is the build system's business. Nix goes further — a build
@@ -76,7 +122,7 @@ identical. Nix has the same issue; the successor is content-addressed
 derivations, which is a later and harder decision, named in
 [ADR 4](docs/adr/0004-input-addressed-derivations.md) rather than ignored.
 
-### 4. Everything is pinned by digest, including the resolution
+### 5. Everything is pinned by digest, including the resolution
 
 `go.sum` pins artifacts. The lock here pins the artifacts *and* the resolution
 that produced them, so re-resolving from the same manifest is a check rather
@@ -85,7 +131,7 @@ by doing it twice.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
-### 5. No install scripts. Ever.
+### 6. No install scripts. Ever.
 
 This is the one that is not a trade-off.
 
@@ -110,8 +156,9 @@ Two seeds are executable evidence, both in the language's Stage 2 slice and
 both running identically on the reference executor and the C11 backend, under
 a hostile `TZ`, locale, and `env -i`:
 
-- `seed/resolver/` — minimal version selection, with order-independence read
-  out of the recorded output rather than asserted;
+- `seed/resolver/` — minimal version selection over semver, with
+  order-independence, transitive monotonicity, and the major-mismatch refusal
+  read out of the recorded output rather than asserted;
 - `seed/derivation/` — input-addressed identity, with the three properties a
   safe binary cache rests on.
 

@@ -82,62 +82,62 @@ check() {
     test "$got" = "$want" || fail "$label: expected '$want', got '$got'"
 }
 
-check 'the bounds this projection resolves within' 1 2 '4 3 '
+# A version is minor.patch inside one major line, and the major is part of the
+# identity — so the resolver never compares across it.
+# A version is minor.patch inside one major line, and the major is part of the
+# identity — so the resolver never compares across it.
+check 'a version encodes minor and patch' 1 3 '3014 3 14 '
+check 'the bounds this projection resolves within' 4 5 '4 3 '
 
 # The rule: two lower bounds, and the larger satisfies both. Not a conflict.
-check 'two requirements select the larger, not the newest published' \
-    3 6 '10 1 5 7 '
-check 'a single requirement selects exactly it' 7 10 '20 1 3 3 '
-check 'a module nobody publishes is named' 11 14 '99 2 99 0 '
+check 'two requirements select the larger, not the newest published' 6 9 '10 1 5 7 '
+check 'a single requirement selects exactly it' 10 13 '20 1 3 3 '
+check 'a module nobody publishes is named' 14 17 '99 2 99 0 '
 check 'a published module nobody requires is answered before the registry' \
-    15 18 '30 4 30 1 '
+    18 21 '30 4 30 1 '
 
 # The property that makes a lock reproducible on another machine.
 check 'the same requirement set in another order gives the same answer' \
-    19 22 '10 1 5 7 '
-check 'and so does its neighbour' 23 26 '20 1 3 3 '
+    22 25 '10 1 5 7 '
+check 'and so does its neighbour' 26 29 '20 1 3 3 '
 
 # The refusal carries the demand, because the caller knows their own ceiling
 # and does not know which requirement was too high.
-check 'a demand above everything published carries the demand' \
-    27 30 '20 3 9 3 '
+check 'a demand above everything published carries the demand' 30 33 '20 3 9 3 '
 # Half-open would be a bug here: the newest release must be selectable.
-check 'the highest published version is selectable' 31 34 '10 1 7 7 '
+check 'the highest published version is selectable' 34 37 '10 1 7 7 '
 
 # --- the transitive closure
-#
-# The app requires 10 at v2; a dependency it pulls in requires 10 at v5 and
-# brings 30 with it. These four lines are the property that makes MVS a single
-# fold rather than a loop.
-check 'without the dependency, the app gets what it asked for' 35 38 '10 1 2 7 '
-check 'the dependency raises the bound the app set lower' 39 42 '10 1 5 7 '
-check 'and leaves an unrelated module where it was' 43 46 '20 1 1 3 '
-check 'a module only the dependency needs is still selected' 47 50 '30 1 1 1 '
-check 'swapping the two sets changes nothing' 51 54 '10 1 5 7 '
+check 'without the dependency, the app gets what it asked for' 38 41 '10 1 2 7 '
+check 'the dependency raises the bound the app set lower' 42 45 '10 1 5 7 '
+check 'and leaves an unrelated module where it was' 46 49 '20 1 1 3 '
+check 'a module only the dependency needs is still selected' 50 53 '30 1 1 1 '
+check 'swapping the two sets changes nothing' 54 57 '10 1 5 7 '
 
 # Monotone, read from the golden rather than trusted: adding requirements may
 # raise a selection and may never lower one. A resolver that could lower one
 # would need a fixed point to iterate towards, which the executable slice has
 # no loop to express.
-without=$(field 35 38 | awk '{print $3}')
-with=$(field 39 42 | awk '{print $3}')
+without=$(field 38 41 | awk '{print $3}')
+with=$(field 42 45 | awk '{print $3}')
 test "$with" -ge "$without" ||
     fail "adding a dependency lowered a selection, from $without to $with;
   MVS would then need iteration, and a lock would depend on traversal order"
 
 # Associativity, likewise: which set a bound was found in cannot matter.
-swapped=$(field 51 54 | awk '{print $3}')
+swapped=$(field 54 57 | awk '{print $3}')
 test "$with" = "$swapped" ||
     fail "swapping the requirement sets changed the selection, $with vs $swapped"
 
+# Order-independence over the flat set, likewise read rather than trusted.
 lines=$(wc -l <"$expected" | tr -d ' ')
-test "$lines" -eq 54 ||
-    fail "recorded decisions cover the whole golden: expected 54 lines, got $lines"
+test "$lines" -eq 57 ||
+    fail "recorded decisions cover the whole golden: expected 57 lines, got $lines"
 
 # Order-independence, read from the golden rather than trusted: the two
 # reordered queries must equal the two original ones, byte for byte.
-original=$(field 3 10)
-reordered=$(field 19 26)
+original=$(field 6 13)
+reordered=$(field 22 29)
 test "$original" = "$reordered" ||
     fail "reordering the requirement set changed the resolution:
   original:  $original
@@ -216,6 +216,53 @@ test "$(id_of 4)" != "$(id_of 7)" ||
 # The refusals, by kind: 2 NoInputs, 3 ReservedDigest.
 test "$(kind_of 8)" = 2 || fail 'an empty closure was not refused'
 test "$(kind_of 9)" = 3 || fail 'a reserved digest in a live slot was not refused'
+
+# ============================================ the CLI surface and its shape
+#
+# Two claims, and each is checked against something rather than asserted.
+
+kcli="$ROOT/contracts/kpm-cli.kofun"
+test -f "$kcli" || fail 'the CLI contract is missing'
+
+for declaration in \
+    'cli Kpm {' \
+    '    name "kpm"' \
+    '    command lock {' \
+    '    command verify {' \
+    '    command why {'
+do
+    grep -Fq -- "$declaration" "$kcli" ||
+        fail "the CLI contract lost a declaration: $declaration"
+done
+
+# Ahead of the compiler, on purpose. If this ever builds, the binding this
+# repository is waiting for has landed and the contract should stop being a
+# contract — so the gate fails rather than letting that go unnoticed.
+if "$KOFUN" build "$kcli" --framework cli -o "$WORK/kpm" \
+    >"$WORK/cli.out" 2>"$WORK/cli.err"
+then
+    fail 'the CLI contract built; arbitrary actions have landed, so this is
+  no longer a contract — bind the commands to the resolver and delete this check'
+fi
+grep -q 'greet options are' "$WORK/cli.err" ||
+    fail "the CLI contract did not stop at the documented boundary:
+$(sed 's/^/    /' "$WORK/cli.err")"
+
+# The distribution claim, measured rather than described: the framework writes
+# a dependency-free static ELF, and a package manager that is one file is the
+# whole reason to care.
+"$KOFUN" build "$ROOT/vendor/kofun/examples/cli_tool.kofun" --framework cli \
+    -o "$WORK/dist" >"$WORK/dist.out" 2>"$WORK/dist.err" ||
+    fail "the native CLI path did not build: $(cat "$WORK/dist.err")"
+bytes=$(wc -c <"$WORK/dist" | tr -d ' ')
+test "$bytes" -lt 65536 ||
+    fail "a native CLI binary is $bytes bytes; the claim is kilobytes, not tens of them"
+if command -v ldd >/dev/null 2>&1; then
+    ldd "$WORK/dist" 2>&1 | grep -q 'not a dynamic executable' ||
+        fail 'the native CLI binary has dynamic dependencies; it is not distributable as one file'
+fi
+printf 'pm: the native CLI path writes a %s-byte binary with no dynamic dependency: PASS\n' \
+    "$bytes"
 
 printf 'pm: an identity is the same in any input order, and moves when any input does: PASS\n'
 printf 'pm: a change in a dependency reaches its dependent: PASS\n'

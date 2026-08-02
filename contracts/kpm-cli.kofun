@@ -1,0 +1,81 @@
+# The kpm command line, as it will be declared.
+#
+# This file is ahead of the compiler on purpose, and the gate requires it to
+# stay that way — the same pattern the language uses for its own canonical
+# surfaces.
+#
+# ## What is already proven, and measured
+#
+# The distribution story works today. `framework/cli` writes a Linux x86-64
+# ELF directly: no C compiler, no assembler, no linker and no shell in the
+# application build, and no libc or dynamic loader at run time. Measured on
+# the framework's own example:
+#
+#     size: 4721 bytes
+#     ELF 64-bit LSB executable, x86-64, statically linked
+#     not a dynamic executable
+#
+# That matters more for a package manager than for most tools. A package
+# manager is the first thing a person installs and the thing they install
+# everything else with; one that is a single dependency-free file can be
+# fetched by digest, mirrored anywhere, and run on a machine with nothing else
+# on it. The alternatives ask for a great deal before they can resolve a
+# dependency: cargo is a multi-megabyte toolchain component, npm needs a Node
+# runtime, bun ships around ninety megabytes.
+#
+# ## What is not possible yet, exactly
+#
+# The framework's action set is four fixed contracts — `greet`, `sum`, `env`,
+# `status` — and its reference documents it as "not a general callback or
+# module system". The restriction is tighter than it first reads: an action
+# fixes its option *names*, not only their types. Declaring
+#
+#     option offline "--offline" bool "Refuse to fetch"
+#
+# under `action greet` is refused with
+#
+#     kofun cli compiler: greet options are bool shout and text prefix
+#
+# So a `kpm` surface cannot be declared today even as a shell around
+# placeholder actions, because the surface is a property of the action rather
+# than of the command. That is issue #7, and it is named rather than worked
+# around: this repository does not ship a CLI whose commands do nothing.
+#
+# The resolver those commands will call already exists and is gated —
+# `seed/resolver/` — so what is missing is the binding, not the work.
+
+cli Kpm {
+    name "kpm"
+    version "0.1.0"
+    about "Package manager for Kofun: minimal version selection, content-addressed store, no install scripts"
+
+    command lock {
+        about "Resolve the manifest and write the lock"
+        position MANIFEST "Path to kofun.toml"
+        option offline "--offline" bool "Refuse to fetch; resolve from the store alone"
+        option out "--out" text "Where to write the lock" default "kofun.packages.lock"
+        action greet
+    }
+
+    command verify {
+        about "Check every store entry against its own digest"
+        position STORE "Path to the content-addressed store"
+        option quiet "--quiet" bool "Report only failures"
+        option format "--format" text "Report format" default "text"
+        action greet
+    }
+
+    command why {
+        about "Explain a selection as the maximum it is"
+        position MODULE "Module to explain"
+        option all "--all" bool "Include bounds that did not decide the answer"
+        option manifest "--manifest" text "Path to kofun.toml" default "kofun.toml"
+        action greet
+    }
+
+    command home {
+        about "Print the store location this build would use"
+        position VARIABLE "Environment variable naming the store"
+        action env
+    }
+}

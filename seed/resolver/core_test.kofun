@@ -7,16 +7,30 @@
 # and what makes a lock reproducible on someone else's machine.
 
 fn empty_requirements() -> Requirements {
-    return requirements_of(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return requirements_of(
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
 }
 
 fn demo_registry() -> Registry {
     # module 10 publishes up to v7, module 20 up to v3, module 30 up to v1
-    return registry_of(10, 7, 1, 20, 3, 1, 30, 1, 1)
+    return registry_of(
+        10, 1, 7, 1,
+        20, 1, 3, 1,
+        30, 1, 1, 1
+    )
 }
 
 fn test_one_requirement_selects_exactly_it() -> Int {
-    let reqs: Requirements = requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
     failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
@@ -27,7 +41,12 @@ fn test_one_requirement_selects_exactly_it() -> Int {
 # The rule: two requirements are two lower bounds, and the larger satisfies
 # both. This is not a conflict and there is nothing to resolve.
 fn test_two_requirements_select_the_larger() -> Int {
-    let reqs: Requirements = requirements_of(10, 2, 1, 10, 5, 1, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1,
+        10, 1, 5, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
     failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
@@ -40,11 +59,26 @@ fn test_two_requirements_select_the_larger() -> Int {
 # here it falls out of the rule being a maximum.
 fn test_the_answer_does_not_depend_on_order() -> Int {
     let ascending: Requirements =
-        requirements_of(10, 1, 1, 10, 4, 1, 10, 6, 1, 0, 0, 0)
+        requirements_of(
+        10, 1, 1, 1,
+        10, 1, 4, 1,
+        10, 1, 6, 1,
+        0, 0, 0, 0
+    )
     let descending: Requirements =
-        requirements_of(10, 6, 1, 10, 4, 1, 10, 1, 1, 0, 0, 0)
+        requirements_of(
+        10, 1, 6, 1,
+        10, 1, 4, 1,
+        10, 1, 1, 1,
+        0, 0, 0, 0
+    )
     let scattered: Requirements =
-        requirements_of(10, 4, 1, 20, 1, 1, 10, 6, 1, 10, 1, 1)
+        requirements_of(
+        10, 1, 4, 1,
+        20, 1, 1, 1,
+        10, 1, 6, 1,
+        10, 1, 1, 1
+    )
     let a: Resolution = resolve(ascending, demo_registry(), 10)
     let b: Resolution = resolve(descending, demo_registry(), 10)
     let c: Resolution = resolve(scattered, demo_registry(), 10)
@@ -60,9 +94,19 @@ fn test_the_answer_does_not_depend_on_order() -> Int {
 # cost.
 fn test_adding_a_dependency_does_not_move_another() -> Int {
     let before: Requirements =
-        requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        requirements_of(
+        10, 1, 2, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let after: Requirements =
-        requirements_of(10, 2, 1, 20, 3, 1, 0, 0, 0, 0, 0, 0)
+        requirements_of(
+        10, 1, 2, 1,
+        20, 1, 3, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let a: Resolution = resolve(before, demo_registry(), 10)
     let b: Resolution = resolve(after, demo_registry(), 10)
     let mut failures = 0
@@ -77,7 +121,12 @@ fn test_adding_a_dependency_does_not_move_another() -> Int {
 # MVS selects the *minimum* that satisfies everyone, so a newly published
 # version does not arrive until something asks for it.
 fn test_a_newer_published_version_is_not_selected_by_itself() -> Int {
-    let reqs: Requirements = requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
     # the registry publishes up to 7 and the answer is still 2
@@ -87,7 +136,12 @@ fn test_a_newer_published_version_is_not_selected_by_itself() -> Int {
 }
 
 fn test_a_module_nobody_publishes_is_named() -> Int {
-    let reqs: Requirements = requirements_of(99, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        99, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let result: Resolution = resolve(reqs, demo_registry(), 99)
     let mut failures = 0
     failures = failures + expect_eq_int(resolution_kind(result), outcome_unpublished())
@@ -98,7 +152,12 @@ fn test_a_module_nobody_publishes_is_named() -> Int {
 # The refusal carries the demand, not the ceiling: the caller knows their own
 # registry and does not know which requirement was too high.
 fn test_a_demand_above_the_registry_carries_the_demand() -> Int {
-    let reqs: Requirements = requirements_of(20, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        20, 1, 9, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let result: Resolution = resolve(reqs, demo_registry(), 20)
     let mut failures = 0
     failures = failures
@@ -110,7 +169,12 @@ fn test_a_demand_above_the_registry_carries_the_demand() -> Int {
 # The stated order: unrequired before unpublished. A query about a module
 # nobody requires must not reveal whether the registry has it.
 fn test_an_unrequired_module_is_answered_before_the_registry() -> Int {
-    let reqs: Requirements = requirements_of(10, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        10, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     # 20 is published but not required; 99 is neither. Both answer the same
     # way, so the answer carries no information about the registry.
     let published: Resolution = resolve(reqs, demo_registry(), 20)
@@ -129,9 +193,19 @@ fn test_an_unrequired_module_is_answered_before_the_registry() -> Int {
 # satisfiable. An off-by-one here refuses the newest release.
 fn test_the_highest_published_version_is_selectable() -> Int {
     let at_ceiling: Requirements =
-        requirements_of(10, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        requirements_of(
+        10, 1, 7, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let over: Requirements =
-        requirements_of(10, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        requirements_of(
+        10, 1, 8, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let a: Resolution = resolve(at_ceiling, demo_registry(), 10)
     let b: Resolution = resolve(over, demo_registry(), 10)
     let mut failures = 0
@@ -145,7 +219,12 @@ fn test_the_highest_published_version_is_selectable() -> Int {
 # Resolution is total: every query produces exactly one of the four outcomes,
 # including for values no manifest would emit.
 fn test_resolve_is_total() -> Int {
-    let reqs: Requirements = requirements_of(10, 2, 1, 20, 1, 1, 0, 0, 0, 0, 0, 0)
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1,
+        20, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
     let mut failures = 0
     failures = failures
         + expect_between_int(resolution_kind(resolve(reqs, demo_registry(), 10)), 1, 4)
@@ -162,12 +241,22 @@ fn test_resolve_is_total() -> Int {
 # ------------------------------------------------- transitive requirements
 
 fn app_requirements() -> Requirements {
-    return requirements_of(10, 2, 1, 20, 1, 1, 0, 0, 0, 0, 0, 0)
+    return requirements_of(
+        10, 1, 2, 1,
+        20, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
 }
 
 # What a dependency brings with it: it needs a newer 10 than the app asked for.
 fn dependency_requirements() -> Requirements {
-    return requirements_of(10, 5, 1, 30, 1, 1, 0, 0, 0, 0, 0, 0)
+    return requirements_of(
+        10, 1, 5, 1,
+        30, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0
+    )
 }
 
 fn test_a_dependency_raises_a_bound_the_app_set_lower() -> Int {
@@ -227,5 +316,63 @@ fn test_a_module_only_a_dependency_requires_is_selected() -> Int {
     failures = failures + expect_eq_int(resolution_kind(brought), outcome_selected())
     failures = failures + expect_eq_int(resolution_payload(brought), 1)
     failures = failures + expect_eq_int(resolution_kind(unwanted), outcome_unrequired())
+    return failures
+}
+
+# ---------------------------------------------------- semantic versioning
+
+fn test_a_version_is_minor_and_patch_inside_one_major() -> Int {
+    let v: Int = version_of(3, 14)
+    let mut failures = 0
+    failures = failures + expect_eq_int(version_minor(v), 3)
+    failures = failures + expect_eq_int(version_patch(v), 14)
+    # Ordering is what MVS's maximum relies on: a later patch is larger, and a
+    # later minor is larger than any patch of an earlier one.
+    failures = failures + expect_gt_int(version_of(3, 15), version_of(3, 14))
+    failures = failures + expect_gt_int(version_of(4, 0), version_of(3, 999))
+    return failures
+}
+
+# Under URL identity two majors are two modules, so every requirement for one
+# module names the same major. A disagreement means something upstream lost
+# the major from the identity — and selecting across a major boundary is the
+# one thing MVS must never do quietly, because it is exactly the breaking
+# change the bump was announcing.
+fn test_requirements_disagreeing_on_the_major_are_refused() -> Int {
+    let registry: Registry = registry_of(
+        10, 1, 7, slot_live(),
+        20, 1, 3, slot_live(),
+        30, 1, 1, slot_live()
+    )
+    let mixed: Requirements = requirements_of(
+        10, 1, 2, slot_live(),
+        10, 2, 5, slot_live(),
+        0, 0, 0, slot_empty(),
+        0, 0, 0, slot_empty()
+    )
+    let result: Resolution = resolve(mixed, registry, 10)
+    let mut failures = 0
+    failures = failures
+        + expect_eq_int(resolution_kind(result), outcome_major_mismatch())
+    failures = failures + expect_eq_int(resolution_payload(result), 2)
+    return failures
+}
+
+fn test_agreeing_majors_still_resolve() -> Int {
+    let registry: Registry = registry_of(
+        10, 1, 7, slot_live(),
+        20, 1, 3, slot_live(),
+        30, 1, 1, slot_live()
+    )
+    let agreed: Requirements = requirements_of(
+        10, 1, 2, slot_live(),
+        10, 1, 5, slot_live(),
+        0, 0, 0, slot_empty(),
+        0, 0, 0, slot_empty()
+    )
+    let result: Resolution = resolve(agreed, registry, 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(result), 5)
     return failures
 }

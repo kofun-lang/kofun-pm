@@ -66,6 +66,10 @@ fn outcome_unrequired() -> Int {
     return 4
 }
 
+fn outcome_major_mismatch() -> Int {
+    return 5
+}
+
 # ---------------------------------------------------------------- values
 
 # What a module offers: its highest published version. MVS never needs the
@@ -79,12 +83,15 @@ type Published = {
 
 type Registry = {
     p0_module: Int,
+    p0_major: Int,
     p0_highest: Int,
     p0_state: Int,
     p1_module: Int,
+    p1_major: Int,
     p1_highest: Int,
     p1_state: Int,
     p2_module: Int,
+    p2_major: Int,
     p2_highest: Int,
     p2_state: Int,
 }
@@ -100,15 +107,19 @@ type Requirement = {
 
 type Requirements = {
     r0_module: Int,
+    r0_major: Int,
     r0_minimum: Int,
     r0_state: Int,
     r1_module: Int,
+    r1_major: Int,
     r1_minimum: Int,
     r1_state: Int,
     r2_module: Int,
+    r2_major: Int,
     r2_minimum: Int,
     r2_state: Int,
     r3_module: Int,
+    r3_major: Int,
     r3_minimum: Int,
     r3_state: Int,
 }
@@ -125,6 +136,7 @@ type Resolution =
     | Unpublished(module: Int)
     | AboveHighest(demanded: Int)
     | Unrequired(module: Int)
+    | MajorMismatch(found: Int)
 
 # --------------------------------------------------------------- helpers
 
@@ -149,6 +161,7 @@ fn resolution_kind(resolution: Resolution) -> Int {
         Unpublished(_) => { kind = outcome_unpublished() },
         AboveHighest(_) => { kind = outcome_above_published() },
         Unrequired(_) => { kind = outcome_unrequired() },
+        MajorMismatch(_) => { kind = outcome_major_mismatch() },
     }
     return kind
 }
@@ -160,6 +173,7 @@ fn resolution_payload(resolution: Resolution) -> Int {
         Unpublished(module) => { payload = module },
         AboveHighest(demanded) => { payload = demanded },
         Unrequired(module) => { payload = module },
+        MajorMismatch(found) => { payload = found },
     }
     return payload
 }
@@ -205,6 +219,12 @@ fn published_count(registry: Registry, module: Int) -> Int {
         + registry.p2_state * eq(registry.p2_module, module)
 }
 
+fn registry_major(registry: Registry, module: Int) -> Int {
+    return registry.p0_state * eq(registry.p0_module, module) * registry.p0_major
+        + registry.p1_state * eq(registry.p1_module, module) * registry.p1_major
+        + registry.p2_state * eq(registry.p2_module, module) * registry.p2_major
+}
+
 fn highest_published(registry: Registry, module: Int) -> Int {
     return registry.p0_state * eq(registry.p0_module, module)
             * registry.p0_highest
@@ -233,6 +253,18 @@ fn resolve(
     if published_count(registry, module) == 0 {
         return Unpublished(module)
     }
+    # Under URL identity two majors are two modules, so every requirement for
+    # one module must name the same major. A disagreement means something
+    # upstream dropped the major from the identity, and selecting across a
+    # major boundary is the one thing MVS must never do quietly.
+    let mismatch: Int = major_mismatch(
+        requirements,
+        module,
+        registry_major(registry, module)
+    )
+    if mismatch >= 0 {
+        return MajorMismatch(mismatch)
+    }
     let demanded: Int = maximum_required(requirements, module)
     if demanded > highest_published(registry, module) {
         return AboveHighest(demanded)
@@ -242,6 +274,77 @@ fn resolve(
     # lower bound, which is why adding a dependency cannot move a version
     # nobody asked to move.
     return Selected(demanded)
+}
+
+# ---------------------------------------------------- semantic versioning
+#
+# A version is `major.minor.patch`, and the major is part of the module's
+# identity — Go's answer, and the one that falls out of URL identity rather
+# than being bolted on.
+#
+# The reason it is needed is easy to miss. Semver alone does not stop MVS.
+# Given `>= 1.5.0` and `>= 2.0.0`, the maximum is `2.0.0`, and MVS would hand
+# that to the package that asked for `1.5.0` — precisely the breaking change
+# the major bump was announcing. "Take the maximum" has no idea that 2.0.0 is
+# not a bigger 1.x.
+#
+# Putting the major in the identity means the resolver never compares them,
+# because it never sees them as the same module. So the resolver does not grow
+# a compatibility mode: it stays a maximum, over `minor.patch`, inside one
+# major line where semver's promise is exactly MVS's assumption.
+#
+# `module` below is therefore an identity that already includes the major. The
+# `major` field is carried so a mismatch can be *named* when one appears —
+# under URL identity it should not, and a resolver that silently accepted one
+# would be selecting across a boundary an author declared.
+
+fn version_scale() -> Int {
+    return 1000
+}
+
+# One comparable number from a minor.patch pair. Bounded by construction: the
+# scale is fixed and the gate records it, so a patch cannot overflow into a
+# minor.
+fn version_of(minor: Int, patch: Int) -> Int {
+    return minor * version_scale() + patch
+}
+
+fn version_minor(version: Int) -> Int {
+    return version // version_scale()
+}
+
+fn version_patch(version: Int) -> Int {
+    return version % version_scale()
+}
+
+# Whether every live requirement for this module agrees on the major.
+#
+# Under URL identity two majors are two modules, so a disagreement here means
+# something upstream lost the major from the identity. It is a refusal rather
+# than an assumption because selecting across a major boundary is the one
+# thing MVS must never do quietly.
+fn major_mismatch(requirements: Requirements, module: Int, major: Int) -> Int {
+    if requirements.r0_state * eq(requirements.r0_module, module) == 1 {
+        if requirements.r0_major != major {
+            return requirements.r0_major
+        }
+    }
+    if requirements.r1_state * eq(requirements.r1_module, module) == 1 {
+        if requirements.r1_major != major {
+            return requirements.r1_major
+        }
+    }
+    if requirements.r2_state * eq(requirements.r2_module, module) == 1 {
+        if requirements.r2_major != major {
+            return requirements.r2_major
+        }
+    }
+    if requirements.r3_state * eq(requirements.r3_module, module) == 1 {
+        if requirements.r3_major != major {
+            return requirements.r3_major
+        }
+    }
+    return 0 - 1
 }
 
 # ------------------------------------------------- transitive requirements
@@ -303,6 +406,15 @@ fn resolve_closure(
     if published_count(registry, module) == 0 {
         return Unpublished(module)
     }
+    let major: Int = registry_major(registry, module)
+    let direct_mismatch: Int = major_mismatch(direct, module, major)
+    if direct_mismatch >= 0 {
+        return MajorMismatch(direct_mismatch)
+    }
+    let inherited_mismatch: Int = major_mismatch(inherited, module, major)
+    if inherited_mismatch >= 0 {
+        return MajorMismatch(inherited_mismatch)
+    }
     let demanded: Int = maximum_across(direct, inherited, module)
     if demanded > highest_published(registry, module) {
         return AboveHighest(demanded)
@@ -313,22 +425,26 @@ fn resolve_closure(
 # ------------------------------------------------------------ constructors
 
 fn requirements_of(
-    m0: Int, v0: Int, s0: Int,
-    m1: Int, v1: Int, s1: Int,
-    m2: Int, v2: Int, s2: Int,
-    m3: Int, v3: Int, s3: Int
+    m0: Int, j0: Int, v0: Int, s0: Int,
+    m1: Int, j1: Int, v1: Int, s1: Int,
+    m2: Int, j2: Int, v2: Int, s2: Int,
+    m3: Int, j3: Int, v3: Int, s3: Int
 ) -> Requirements {
     let value: Requirements = Requirements(
         r0_module: m0,
+        r0_major: j0,
         r0_minimum: v0,
         r0_state: s0,
         r1_module: m1,
+        r1_major: j1,
         r1_minimum: v1,
         r1_state: s1,
         r2_module: m2,
+        r2_major: j2,
         r2_minimum: v2,
         r2_state: s2,
         r3_module: m3,
+        r3_major: j3,
         r3_minimum: v3,
         r3_state: s3
     )
@@ -336,18 +452,21 @@ fn requirements_of(
 }
 
 fn registry_of(
-    m0: Int, h0: Int, s0: Int,
-    m1: Int, h1: Int, s1: Int,
-    m2: Int, h2: Int, s2: Int
+    m0: Int, j0: Int, h0: Int, s0: Int,
+    m1: Int, j1: Int, h1: Int, s1: Int,
+    m2: Int, j2: Int, h2: Int, s2: Int
 ) -> Registry {
     let value: Registry = Registry(
         p0_module: m0,
+        p0_major: j0,
         p0_highest: h0,
         p0_state: s0,
         p1_module: m1,
+        p1_major: j1,
         p1_highest: h1,
         p1_state: s1,
         p2_module: m2,
+        p2_major: j2,
         p2_highest: h2,
         p2_state: s2
     )
