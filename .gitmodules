@@ -1,0 +1,3 @@
+[submodule "vendor/kofun"]
+	path = vendor/kofun
+	url = https://github.com/hjosugi/kofun.git

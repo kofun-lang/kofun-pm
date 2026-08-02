@@ -1,0 +1,160 @@
+# Unit tests for minimal version selection.
+#
+# The property worth testing is not "it picks a version" — it is that the
+# answer is a *function* of the requirement set. Several tests below build the
+# same requirements in different slot orders and assert the same result,
+# because order-independence is what a solver-based resolver cannot promise
+# and what makes a lock reproducible on someone else's machine.
+
+fn empty_requirements() -> Requirements {
+    return requirements_of(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+
+fn demo_registry() -> Registry {
+    # module 10 publishes up to v7, module 20 up to v3, module 30 up to v1
+    return registry_of(10, 7, 1, 20, 3, 1, 30, 1, 1)
+}
+
+fn test_one_requirement_selects_exactly_it() -> Int {
+    let reqs: Requirements = requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let result: Resolution = resolve(reqs, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(result), 2)
+    return failures
+}
+
+# The rule: two requirements are two lower bounds, and the larger satisfies
+# both. This is not a conflict and there is nothing to resolve.
+fn test_two_requirements_select_the_larger() -> Int {
+    let reqs: Requirements = requirements_of(10, 2, 1, 10, 5, 1, 0, 0, 0, 0, 0, 0)
+    let result: Resolution = resolve(reqs, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(result), 5)
+    return failures
+}
+
+# The property that makes a lock reproducible: the same set in any order gives
+# the same answer. A solver can promise this only by fixing its search order;
+# here it falls out of the rule being a maximum.
+fn test_the_answer_does_not_depend_on_order() -> Int {
+    let ascending: Requirements =
+        requirements_of(10, 1, 1, 10, 4, 1, 10, 6, 1, 0, 0, 0)
+    let descending: Requirements =
+        requirements_of(10, 6, 1, 10, 4, 1, 10, 1, 1, 0, 0, 0)
+    let scattered: Requirements =
+        requirements_of(10, 4, 1, 20, 1, 1, 10, 6, 1, 10, 1, 1)
+    let a: Resolution = resolve(ascending, demo_registry(), 10)
+    let b: Resolution = resolve(descending, demo_registry(), 10)
+    let c: Resolution = resolve(scattered, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_payload(a), 6)
+    failures = failures + expect_eq_int(resolution_payload(b), 6)
+    failures = failures + expect_eq_int(resolution_payload(c), 6)
+    return failures
+}
+
+# Adding a dependency must not move a version nobody asked to move. This is
+# the behaviour npm and Cargo cannot offer, and the reason to accept MVS's
+# cost.
+fn test_adding_a_dependency_does_not_move_another() -> Int {
+    let before: Requirements =
+        requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let after: Requirements =
+        requirements_of(10, 2, 1, 20, 3, 1, 0, 0, 0, 0, 0, 0)
+    let a: Resolution = resolve(before, demo_registry(), 10)
+    let b: Resolution = resolve(after, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_payload(a), 2)
+    failures = failures + expect_eq_int(resolution_payload(b), 2)
+    # …and the new dependency resolves to what it asked for, not the newest.
+    let added: Resolution = resolve(after, demo_registry(), 20)
+    failures = failures + expect_eq_int(resolution_payload(added), 3)
+    return failures
+}
+
+# MVS selects the *minimum* that satisfies everyone, so a newly published
+# version does not arrive until something asks for it.
+fn test_a_newer_published_version_is_not_selected_by_itself() -> Int {
+    let reqs: Requirements = requirements_of(10, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let result: Resolution = resolve(reqs, demo_registry(), 10)
+    let mut failures = 0
+    # the registry publishes up to 7 and the answer is still 2
+    failures = failures + expect_eq_int(highest_published(demo_registry(), 10), 7)
+    failures = failures + expect_eq_int(resolution_payload(result), 2)
+    return failures
+}
+
+fn test_a_module_nobody_publishes_is_named() -> Int {
+    let reqs: Requirements = requirements_of(99, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let result: Resolution = resolve(reqs, demo_registry(), 99)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_unpublished())
+    failures = failures + expect_eq_int(resolution_payload(result), 99)
+    return failures
+}
+
+# The refusal carries the demand, not the ceiling: the caller knows their own
+# registry and does not know which requirement was too high.
+fn test_a_demand_above_the_registry_carries_the_demand() -> Int {
+    let reqs: Requirements = requirements_of(20, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let result: Resolution = resolve(reqs, demo_registry(), 20)
+    let mut failures = 0
+    failures = failures
+        + expect_eq_int(resolution_kind(result), outcome_above_published())
+    failures = failures + expect_eq_int(resolution_payload(result), 9)
+    return failures
+}
+
+# The stated order: unrequired before unpublished. A query about a module
+# nobody requires must not reveal whether the registry has it.
+fn test_an_unrequired_module_is_answered_before_the_registry() -> Int {
+    let reqs: Requirements = requirements_of(10, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    # 20 is published but not required; 99 is neither. Both answer the same
+    # way, so the answer carries no information about the registry.
+    let published: Resolution = resolve(reqs, demo_registry(), 20)
+    let absent: Resolution = resolve(reqs, demo_registry(), 99)
+    let mut failures = 0
+    failures = failures
+        + expect_eq_int(resolution_kind(published), outcome_unrequired())
+    failures = failures
+        + expect_eq_int(resolution_kind(absent), outcome_unrequired())
+    failures = failures + expect_eq_int(resolution_payload(published), 20)
+    failures = failures + expect_eq_int(resolution_payload(absent), 99)
+    return failures
+}
+
+# The boundary: a requirement exactly at the highest published version is
+# satisfiable. An off-by-one here refuses the newest release.
+fn test_the_highest_published_version_is_selectable() -> Int {
+    let at_ceiling: Requirements =
+        requirements_of(10, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let over: Requirements =
+        requirements_of(10, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    let a: Resolution = resolve(at_ceiling, demo_registry(), 10)
+    let b: Resolution = resolve(over, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(a), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(a), 7)
+    failures = failures
+        + expect_eq_int(resolution_kind(b), outcome_above_published())
+    return failures
+}
+
+# Resolution is total: every query produces exactly one of the four outcomes,
+# including for values no manifest would emit.
+fn test_resolve_is_total() -> Int {
+    let reqs: Requirements = requirements_of(10, 2, 1, 20, 1, 1, 0, 0, 0, 0, 0, 0)
+    let mut failures = 0
+    failures = failures
+        + expect_between_int(resolution_kind(resolve(reqs, demo_registry(), 10)), 1, 4)
+    failures = failures
+        + expect_between_int(resolution_kind(resolve(reqs, demo_registry(), 0)), 1, 4)
+    failures = failures
+        + expect_between_int(resolution_kind(resolve(reqs, demo_registry(), 0 - 1)), 1, 4)
+    failures = failures
+        + expect_between_int(
+            resolution_kind(resolve(empty_requirements(), demo_registry(), 10)), 1, 4)
+    return failures
+}

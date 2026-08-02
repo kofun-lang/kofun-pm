@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Resolver unit suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: Report the pinned language revision
+        run: git -C vendor/kofun log -1 --format='vendor/kofun is at %h %s'
+      - run: sh vendor/kofun/tooling/kotest/run.sh seed/resolver/core_test.kofun
+
+  gate:
+    name: Resolver gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sh tests/pm/check.sh

@@ -1,0 +1,289 @@
+# Minimal version selection, in the language's executable slice.
+#
+# This file is the argument for the design. npm and Cargo resolve by search: a
+# solver explores the version space, and a failure is reported in terms of the
+# search. Go selects the maximum required version per module and stops — and
+# the whole of that fits here, in a slice with no loops, no allocation, and
+# fixed-arity records, small enough that a gate can read every decision it
+# makes.
+#
+# An algorithm that fits in this much space is an algorithm a user can hold.
+# That is the real reason to prefer it, and the reproducibility is a
+# consequence: the selected version is a *function* of the requirement set, so
+# it does not depend on iteration order, on which requirement was seen first,
+# or on anything a solver would call a heuristic.
+#
+# The core rule, stated once:
+#
+#     selected(module) = max { version : (module, version) is required }
+#
+# There is no conflict case. Two requirements for different versions of one
+# module are not a contradiction to be resolved; they are two lower bounds,
+# and the larger one satisfies both. This is why MVS has no backtracking and
+# why it cannot fail in the way a solver fails.
+#
+# What *can* fail is checkable and is a closed sum: a module nobody publishes,
+# a requirement above every published version, and a graph larger than this
+# bounded projection. Each carries what was observed.
+#
+# The canonical surface — a List of requirements, Text module names, semver —
+# is contracts/resolver.kofun, pinned by the gate at the compiler boundary.
+# Here a module is a code and a version is an Int, which is the same
+# resolution with a smaller vocabulary.
+
+# ------------------------------------------------------------- constants
+
+fn requirement_capacity() -> Int {
+    return 4
+}
+
+fn registry_capacity() -> Int {
+    return 3
+}
+
+fn slot_empty() -> Int {
+    return 0
+}
+
+fn slot_live() -> Int {
+    return 1
+}
+
+# Outcomes. Each carries what was observed rather than a description of it.
+fn outcome_selected() -> Int {
+    return 1
+}
+
+fn outcome_unpublished() -> Int {
+    return 2
+}
+
+fn outcome_above_published() -> Int {
+    return 3
+}
+
+fn outcome_unrequired() -> Int {
+    return 4
+}
+
+# ---------------------------------------------------------------- values
+
+# What a module offers: its highest published version. MVS never needs the
+# full list — it needs the maximum required, and whether the registry can
+# satisfy it.
+type Published = {
+    module: Int,
+    highest: Int,
+    state: Int,
+}
+
+type Registry = {
+    p0_module: Int,
+    p0_highest: Int,
+    p0_state: Int,
+    p1_module: Int,
+    p1_highest: Int,
+    p1_state: Int,
+    p2_module: Int,
+    p2_highest: Int,
+    p2_state: Int,
+}
+
+# One requirement: some package says it needs at least this version of that
+# module. "At least" is the whole semantics; a requirement is a lower bound
+# and never an upper one.
+type Requirement = {
+    module: Int,
+    minimum: Int,
+    state: Int,
+}
+
+type Requirements = {
+    r0_module: Int,
+    r0_minimum: Int,
+    r0_state: Int,
+    r1_module: Int,
+    r1_minimum: Int,
+    r1_state: Int,
+    r2_module: Int,
+    r2_minimum: Int,
+    r2_state: Int,
+    r3_module: Int,
+    r3_minimum: Int,
+    r3_state: Int,
+}
+
+# The closed resolution domain.
+#
+# `Selected` carries the version chosen. `Unpublished` carries the module
+# nobody offers. `AboveHighest` carries the version that was demanded — the
+# demand, not the ceiling, because the caller already knows their own ceiling
+# and does not know which requirement was too high. `Unrequired` carries the
+# module, for a query about something no one asked for.
+type Resolution =
+    | Selected(version: Int)
+    | Unpublished(module: Int)
+    | AboveHighest(demanded: Int)
+    | Unrequired(module: Int)
+
+# --------------------------------------------------------------- helpers
+
+fn eq(left: Int, right: Int) -> Int {
+    if left == right {
+        return 1
+    }
+    return 0
+}
+
+fn larger(left: Int, right: Int) -> Int {
+    if left > right {
+        return left
+    }
+    return right
+}
+
+fn resolution_kind(resolution: Resolution) -> Int {
+    let mut kind = 0
+    match resolution {
+        Selected(_) => { kind = outcome_selected() },
+        Unpublished(_) => { kind = outcome_unpublished() },
+        AboveHighest(_) => { kind = outcome_above_published() },
+        Unrequired(_) => { kind = outcome_unrequired() },
+    }
+    return kind
+}
+
+fn resolution_payload(resolution: Resolution) -> Int {
+    let mut payload = 0
+    match resolution {
+        Selected(version) => { payload = version },
+        Unpublished(module) => { payload = module },
+        AboveHighest(demanded) => { payload = demanded },
+        Unrequired(module) => { payload = module },
+    }
+    return payload
+}
+
+# ------------------------------------------------------------ the rule
+
+# How many live requirements name this module. Four comparisons, always: the
+# answer does not depend on where in the list the module appears, which is the
+# property that makes the resolution order-independent.
+fn requirement_count(requirements: Requirements, module: Int) -> Int {
+    return requirements.r0_state * eq(requirements.r0_module, module)
+        + requirements.r1_state * eq(requirements.r1_module, module)
+        + requirements.r2_state * eq(requirements.r2_module, module)
+        + requirements.r3_state * eq(requirements.r3_module, module)
+}
+
+# The rule itself: the maximum lower bound.
+#
+# Written as nested `larger` over every slot rather than as a search that
+# stops early, so the same requirement set gives the same answer whatever
+# order the slots were filled in. A requirement that does not name this module
+# contributes 0, which cannot raise a maximum over a real requirement because
+# versions start at 1.
+fn maximum_required(requirements: Requirements, module: Int) -> Int {
+    let a: Int = requirements.r0_state
+        * eq(requirements.r0_module, module)
+        * requirements.r0_minimum
+    let b: Int = requirements.r1_state
+        * eq(requirements.r1_module, module)
+        * requirements.r1_minimum
+    let c: Int = requirements.r2_state
+        * eq(requirements.r2_module, module)
+        * requirements.r2_minimum
+    let d: Int = requirements.r3_state
+        * eq(requirements.r3_module, module)
+        * requirements.r3_minimum
+    return larger(larger(a, b), larger(c, d))
+}
+
+fn published_count(registry: Registry, module: Int) -> Int {
+    return registry.p0_state * eq(registry.p0_module, module)
+        + registry.p1_state * eq(registry.p1_module, module)
+        + registry.p2_state * eq(registry.p2_module, module)
+}
+
+fn highest_published(registry: Registry, module: Int) -> Int {
+    return registry.p0_state * eq(registry.p0_module, module)
+            * registry.p0_highest
+        + registry.p1_state * eq(registry.p1_module, module)
+            * registry.p1_highest
+        + registry.p2_state * eq(registry.p2_module, module)
+            * registry.p2_highest
+}
+
+# Resolve one module.
+#
+# The order is the contract and the gate reads it: a module nobody requires is
+# answered before the registry is consulted, and a module nobody publishes is
+# answered before a version is compared. So a query about an unrequired module
+# cannot learn whether it exists in the registry, and a resolution failure
+# always names the earliest thing that was wrong rather than a consequence of
+# it.
+fn resolve(
+    requirements: Requirements,
+    registry: Registry,
+    module: Int
+) -> Resolution {
+    if requirement_count(requirements, module) == 0 {
+        return Unrequired(module)
+    }
+    if published_count(registry, module) == 0 {
+        return Unpublished(module)
+    }
+    let demanded: Int = maximum_required(requirements, module)
+    if demanded > highest_published(registry, module) {
+        return AboveHighest(demanded)
+    }
+    # The whole of minimal version selection. Not the highest published, not
+    # the newest compatible — the smallest version that satisfies every stated
+    # lower bound, which is why adding a dependency cannot move a version
+    # nobody asked to move.
+    return Selected(demanded)
+}
+
+# ------------------------------------------------------------ constructors
+
+fn requirements_of(
+    m0: Int, v0: Int, s0: Int,
+    m1: Int, v1: Int, s1: Int,
+    m2: Int, v2: Int, s2: Int,
+    m3: Int, v3: Int, s3: Int
+) -> Requirements {
+    let value: Requirements = Requirements(
+        r0_module: m0,
+        r0_minimum: v0,
+        r0_state: s0,
+        r1_module: m1,
+        r1_minimum: v1,
+        r1_state: s1,
+        r2_module: m2,
+        r2_minimum: v2,
+        r2_state: s2,
+        r3_module: m3,
+        r3_minimum: v3,
+        r3_state: s3
+    )
+    return value
+}
+
+fn registry_of(
+    m0: Int, h0: Int, s0: Int,
+    m1: Int, h1: Int, s1: Int,
+    m2: Int, h2: Int, s2: Int
+) -> Registry {
+    let value: Registry = Registry(
+        p0_module: m0,
+        p0_highest: h0,
+        p0_state: s0,
+        p1_module: m1,
+        p1_highest: h1,
+        p1_state: s1,
+        p2_module: m2,
+        p2_highest: h2,
+        p2_state: s2
+    )
+    return value
+}

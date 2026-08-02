@@ -1,0 +1,29 @@
+# Roadmap
+
+The unit of work is a bounded child: one reviewable change, one gate, one
+honest boundary statement. Every lane names what it is blocked on.
+
+| lane | first epics | blocked on |
+|---|---|---|
+| P1 resolution | MVS core (**landed**); transitive requirements; the major-version boundary decision; workspace members | — |
+| P2 manifest & lock | `kofun.toml` dependency section; lock format v1 pinning the resolution *and* the artifacts; re-lock idempotence as a gate | the language's `kofun.packages.lock` already pins by sha256 — this extends it |
+| P3 store | content-addressed layout; links rather than copies; `kpm verify` as a gate over the store's own integrity | — |
+| P4 fetch | source identity (URL, the Go move) vs a registry; integrity on arrival; offline as the default rather than a flag | the identity decision, which is its own ADR |
+| P5 cli | `kpm add/lock/verify/tree/why`; `why` explains a selection as the maximum it is, which is only possible because the rule is a maximum | P1, P2 |
+| P6 publishing | who may publish a name; signing; immutability of a published version | P4's identity decision |
+| P7 build integration | dependencies reaching `kofun build`; the build-target answer to what install scripts used to do | the language's build system contract |
+
+## Sequencing
+
+```
+now ──► P1 resolution + P2 manifest/lock     (pure, unblocked, the identity of the tool)
+     ──► P3 store + P4 fetch                 (once identity is decided)
+     ──► P5 cli
+later ─► P6, P7
+```
+
+## What is deliberately not here
+
+No registry service. Whether Kofun needs one, or whether source identity by
+URL is enough as it was for Go, is an open decision — and building a registry
+before making it would answer it by accident.

@@ -1,0 +1,74 @@
+# The resolver's shell: the scenario, and what it prints.
+#
+# Four integers per query — module, outcome kind, payload, and the highest the
+# registry publishes — so a reader can see the selection and the ceiling it
+# was checked against on one line.
+
+fn emit(registry: Registry, requirements: Requirements, module: Int) -> Int {
+    let result: Resolution = resolve(requirements, registry, module)
+    print(module)
+    print(resolution_kind(result))
+    print(resolution_payload(result))
+    print(highest_published(registry, module))
+    return 0
+}
+
+fn main() -> Int {
+    # The bounds this projection resolves within, printed so the golden
+    # records them: a reader of the output knows what it was bounded by
+    # without reading the source.
+    print(requirement_capacity())
+    print(registry_capacity())
+
+    # 10 publishes to v7, 20 to v3, 30 to v1.
+    let registry: Registry = registry_of(
+        10, 7, slot_live(),
+        20, 3, slot_live(),
+        30, 1, slot_live()
+    )
+
+    # An application requiring 10 at v2, and a dependency requiring 10 at v5.
+    # MVS selects 5: the larger lower bound satisfies both, and nothing was
+    # resolved away.
+    let reqs: Requirements = requirements_of(
+        10, 2, slot_live(),
+        10, 5, slot_live(),
+        20, 3, slot_live(),
+        99, 1, slot_live()
+    )
+
+    emit(registry, reqs, 10)
+    emit(registry, reqs, 20)
+    emit(registry, reqs, 99)
+    emit(registry, reqs, 30)
+
+    # The same requirement set in a different order gives the same answer.
+    # Printed rather than asserted in a comment, so the golden carries it.
+    let reordered: Requirements = requirements_of(
+        99, 1, slot_live(),
+        20, 3, slot_live(),
+        10, 5, slot_live(),
+        10, 2, slot_live()
+    )
+    emit(registry, reordered, 10)
+    emit(registry, reordered, 20)
+
+    # A demand above everything published, carrying the demand.
+    let excessive: Requirements = requirements_of(
+        20, 9, slot_live(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty()
+    )
+    emit(registry, excessive, 20)
+
+    # And the ceiling itself, which must be selectable.
+    let at_ceiling: Requirements = requirements_of(
+        10, 7, slot_live(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty()
+    )
+    emit(registry, at_ceiling, 10)
+    return 0
+}
