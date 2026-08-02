@@ -244,6 +244,72 @@ fn resolve(
     return Selected(demanded)
 }
 
+# ------------------------------------------------- transitive requirements
+#
+# A real graph is not flat: a package's own requirements join the set. The
+# question that decides whether MVS needs iteration is whether adding them can
+# ever *lower* a selection, and the answer is no — every requirement is a
+# lower bound, and a union of lower bounds has a maximum that is at least each
+# part's maximum.
+#
+# Two consequences, both checkable:
+#
+#   max(A union B) = max(max A, max B)   the maximum is associative, which is
+#                                        why one pass over the closure gives
+#                                        the same answer as any traversal
+#                                        order;
+#
+#   max(A union B) >= max(A)             adding requirements is monotone, so
+#                                        there is no fixed point to iterate
+#                                        towards. A solver must iterate
+#                                        because its assignment can change
+#                                        non-monotonically; MVS cannot.
+#
+# This is the whole reason a transitive resolve is a single fold rather than a
+# loop — which matters here, because the executable slice has no loops and
+# would not have let us write the other kind.
+
+# The maximum required for a module across two requirement sets, without
+# forming the union first. If this ever disagreed with resolving the merged
+# set, the closure would depend on how it was assembled.
+fn maximum_across(
+    direct: Requirements,
+    inherited: Requirements,
+    module: Int
+) -> Int {
+    return larger(
+        maximum_required(direct, module),
+        maximum_required(inherited, module)
+    )
+}
+
+# Resolve a module against a two-level closure: the requirements written in
+# the manifest, and the ones a dependency brought with it.
+#
+# The order is the same contract as the flat resolve, and for the same reason:
+# a module nobody requires — in either set — is answered before the registry
+# is consulted.
+fn resolve_closure(
+    direct: Requirements,
+    inherited: Requirements,
+    registry: Registry,
+    module: Int
+) -> Resolution {
+    let required: Int = requirement_count(direct, module)
+        + requirement_count(inherited, module)
+    if required == 0 {
+        return Unrequired(module)
+    }
+    if published_count(registry, module) == 0 {
+        return Unpublished(module)
+    }
+    let demanded: Int = maximum_across(direct, inherited, module)
+    if demanded > highest_published(registry, module) {
+        return AboveHighest(demanded)
+    }
+    return Selected(demanded)
+}
+
 # ------------------------------------------------------------ constructors
 
 fn requirements_of(

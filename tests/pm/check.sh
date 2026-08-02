@@ -104,9 +104,35 @@ check 'a demand above everything published carries the demand' \
 # Half-open would be a bug here: the newest release must be selectable.
 check 'the highest published version is selectable' 31 34 '10 1 7 7 '
 
+# --- the transitive closure
+#
+# The app requires 10 at v2; a dependency it pulls in requires 10 at v5 and
+# brings 30 with it. These four lines are the property that makes MVS a single
+# fold rather than a loop.
+check 'without the dependency, the app gets what it asked for' 35 38 '10 1 2 7 '
+check 'the dependency raises the bound the app set lower' 39 42 '10 1 5 7 '
+check 'and leaves an unrelated module where it was' 43 46 '20 1 1 3 '
+check 'a module only the dependency needs is still selected' 47 50 '30 1 1 1 '
+check 'swapping the two sets changes nothing' 51 54 '10 1 5 7 '
+
+# Monotone, read from the golden rather than trusted: adding requirements may
+# raise a selection and may never lower one. A resolver that could lower one
+# would need a fixed point to iterate towards, which the executable slice has
+# no loop to express.
+without=$(field 35 38 | awk '{print $3}')
+with=$(field 39 42 | awk '{print $3}')
+test "$with" -ge "$without" ||
+    fail "adding a dependency lowered a selection, from $without to $with;
+  MVS would then need iteration, and a lock would depend on traversal order"
+
+# Associativity, likewise: which set a bound was found in cannot matter.
+swapped=$(field 51 54 | awk '{print $3}')
+test "$with" = "$swapped" ||
+    fail "swapping the requirement sets changed the selection, $with vs $swapped"
+
 lines=$(wc -l <"$expected" | tr -d ' ')
-test "$lines" -eq 34 ||
-    fail "recorded decisions cover the whole golden: expected 34 lines, got $lines"
+test "$lines" -eq 54 ||
+    fail "recorded decisions cover the whole golden: expected 54 lines, got $lines"
 
 # Order-independence, read from the golden rather than trusted: the two
 # reordered queries must equal the two original ones, byte for byte.
@@ -197,4 +223,5 @@ printf 'pm: a change in a dependency reaches its dependent: PASS\n'
 printf 'pm: the core resolves without printing or reaching for the world: PASS\n'
 printf 'pm: minimal version selection, every closed outcome read by name: PASS\n'
 printf 'pm: the same requirement set in any order gives the same lock: PASS\n'
+printf 'pm: a transitive bound only ever rises, so one pass is the whole answer: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'

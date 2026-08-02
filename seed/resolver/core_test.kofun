@@ -158,3 +158,74 @@ fn test_resolve_is_total() -> Int {
             resolution_kind(resolve(empty_requirements(), demo_registry(), 10)), 1, 4)
     return failures
 }
+
+# ------------------------------------------------- transitive requirements
+
+fn app_requirements() -> Requirements {
+    return requirements_of(10, 2, 1, 20, 1, 1, 0, 0, 0, 0, 0, 0)
+}
+
+# What a dependency brings with it: it needs a newer 10 than the app asked for.
+fn dependency_requirements() -> Requirements {
+    return requirements_of(10, 5, 1, 30, 1, 1, 0, 0, 0, 0, 0, 0)
+}
+
+fn test_a_dependency_raises_a_bound_the_app_set_lower() -> Int {
+    let direct: Requirements = app_requirements()
+    let inherited: Requirements = dependency_requirements()
+    let alone: Resolution = resolve(direct, demo_registry(), 10)
+    let together: Resolution = resolve_closure(direct, inherited, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_payload(alone), 2)
+    failures = failures + expect_eq_int(resolution_payload(together), 5)
+    return failures
+}
+
+# Monotone: adding requirements can raise a bound and can never lower one.
+# This is why MVS needs no fixed point — and why a transitive resolve is a
+# single fold rather than a loop, which the executable slice would not have
+# allowed anyway.
+fn test_adding_requirements_never_lowers_a_selection() -> Int {
+    let direct: Requirements = app_requirements()
+    let nothing: Requirements = empty_requirements()
+    let inherited: Requirements = dependency_requirements()
+    let mut failures = 0
+    # module 10: 2 alone, 5 with the dependency — raised
+    failures = failures + expect_ge_int(
+        resolution_payload(resolve_closure(direct, inherited, demo_registry(), 10)),
+        resolution_payload(resolve_closure(direct, nothing, demo_registry(), 10)))
+    # module 20: 1 either way — untouched by an unrelated dependency
+    failures = failures + expect_ge_int(
+        resolution_payload(resolve_closure(direct, inherited, demo_registry(), 20)),
+        resolution_payload(resolve_closure(direct, nothing, demo_registry(), 20)))
+    failures = failures + expect_eq_int(
+        resolution_payload(resolve_closure(direct, inherited, demo_registry(), 20)), 1)
+    return failures
+}
+
+# The maximum is associative, so the answer does not depend on which set a
+# requirement was found in. Swapping the two sets must change nothing.
+fn test_the_closure_does_not_depend_on_which_set_a_bound_came_from() -> Int {
+    let a: Resolution =
+        resolve_closure(app_requirements(), dependency_requirements(), demo_registry(), 10)
+    let b: Resolution =
+        resolve_closure(dependency_requirements(), app_requirements(), demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_payload(a), resolution_payload(b))
+    failures = failures + expect_eq_int(resolution_kind(a), resolution_kind(b))
+    return failures
+}
+
+# A module only a dependency needs still resolves, and one nobody needs is
+# still answered before the registry.
+fn test_a_module_only_a_dependency_requires_is_selected() -> Int {
+    let brought: Resolution =
+        resolve_closure(app_requirements(), dependency_requirements(), demo_registry(), 30)
+    let unwanted: Resolution =
+        resolve_closure(app_requirements(), empty_requirements(), demo_registry(), 30)
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(brought), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(brought), 1)
+    failures = failures + expect_eq_int(resolution_kind(unwanted), outcome_unrequired())
+    return failures
+}

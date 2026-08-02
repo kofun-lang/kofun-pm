@@ -13,6 +13,20 @@ fn emit(registry: Registry, requirements: Requirements, module: Int) -> Int {
     return 0
 }
 
+fn emit_closure(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    module: Int
+) -> Int {
+    let result: Resolution = resolve_closure(direct, inherited, registry, module)
+    print(module)
+    print(resolution_kind(result))
+    print(resolution_payload(result))
+    print(highest_published(registry, module))
+    return 0
+}
+
 fn main() -> Int {
     # The bounds this projection resolves within, printed so the golden
     # records them: a reader of the output knows what it was bounded by
@@ -70,5 +84,38 @@ fn main() -> Int {
         0, 0, slot_empty()
     )
     emit(registry, at_ceiling, 10)
+
+    # --- the transitive closure
+    #
+    # The app asks for 10 at v2 and 20 at v1. A dependency it pulls in asks
+    # for 10 at v5 and brings 30 with it. The recorded output carries the
+    # selection with and without that dependency, so monotonicity is a fact in
+    # the golden rather than a claim in a comment.
+    let direct: Requirements = requirements_of(
+        10, 2, slot_live(),
+        20, 1, slot_live(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty()
+    )
+    let inherited: Requirements = requirements_of(
+        10, 5, slot_live(),
+        30, 1, slot_live(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty()
+    )
+    let nothing: Requirements = requirements_of(
+        0, 0, slot_empty(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty(),
+        0, 0, slot_empty()
+    )
+
+    emit_closure(registry, direct, nothing, 10)
+    emit_closure(registry, direct, inherited, 10)
+    emit_closure(registry, direct, inherited, 20)
+    emit_closure(registry, direct, inherited, 30)
+    # Swapping the two sets must change nothing: a bound is a bound whichever
+    # side it was found on.
+    emit_closure(registry, inherited, direct, 10)
     return 0
 }
