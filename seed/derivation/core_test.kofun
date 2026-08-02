@@ -1,0 +1,174 @@
+# Unit tests for input-addressed derivation identity.
+#
+# The three properties from ADR 4, tested as properties rather than as
+# examples: order-independence, completeness, and transitivity.
+
+fn tool() -> Int {
+    return 7001
+}
+
+fn settings() -> Int {
+    return 42
+}
+
+fn two_inputs(first: Int, second: Int) -> Closure {
+    return closure_of(
+        first, slot_live(),
+        second, slot_live(),
+        0, slot_empty(),
+        0, slot_empty(),
+        tool(),
+        settings()
+    )
+}
+
+# ------------------------------------------------------ order-independence
+
+fn test_the_same_inputs_in_any_order_give_the_same_identity() -> Int {
+    let ab: Closure = two_inputs(500, 900)
+    let ba: Closure = two_inputs(900, 500)
+    let mut failures = 0
+    failures = failures + expect_eq_int(identity_of(ab), identity_of(ba))
+    return failures
+}
+
+# Four inputs, every arrangement that matters: the sorting network must put
+# them in the same order whatever slot they arrived in.
+fn test_four_inputs_sort_before_folding() -> Int {
+    let ascending: Closure = closure_of(
+        100, slot_live(), 200, slot_live(),
+        300, slot_live(), 400, slot_live(), tool(), settings())
+    let descending: Closure = closure_of(
+        400, slot_live(), 300, slot_live(),
+        200, slot_live(), 100, slot_live(), tool(), settings())
+    let scattered: Closure = closure_of(
+        300, slot_live(), 100, slot_live(),
+        400, slot_live(), 200, slot_live(), tool(), settings())
+    let mut failures = 0
+    failures = failures
+        + expect_eq_int(identity_of(ascending), identity_of(descending))
+    failures = failures
+        + expect_eq_int(identity_of(ascending), identity_of(scattered))
+    return failures
+}
+
+# ------------------------------------------------------------ completeness
+
+# Every input must reach the identity. An input that could change without
+# changing it is an input the cache would ignore.
+fn test_changing_a_source_changes_the_identity() -> Int {
+    let mut failures = 0
+    failures = failures
+        + expect_ne_int(identity_of(two_inputs(500, 900)),
+                        identity_of(two_inputs(501, 900)))
+    failures = failures
+        + expect_ne_int(identity_of(two_inputs(500, 900)),
+                        identity_of(two_inputs(500, 901)))
+    return failures
+}
+
+fn test_changing_the_toolchain_changes_the_identity() -> Int {
+    let a: Closure = closure_of(500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), 7001, settings())
+    let b: Closure = closure_of(500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), 7002, settings())
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_a_setting_changes_the_identity() -> Int {
+    let a: Closure = closure_of(500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), 42)
+    let b: Closure = closure_of(500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), 43)
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+# Removing an input must change the identity. If it did not, a build could
+# lose a dependency and keep its cache entry.
+fn test_removing_an_input_changes_the_identity() -> Int {
+    let both: Closure = two_inputs(500, 900)
+    let one: Closure = closure_of(500, slot_live(), 0, slot_empty(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(both), identity_of(one))
+    return failures
+}
+
+# ------------------------------------------------------------ transitivity
+
+# A dependency contributes its *derivation* digest. So a change deep in the
+# graph reaches every dependent — which is the property a scheme hashing only
+# direct sources would lack.
+fn test_a_change_in_a_dependency_reaches_its_dependent() -> Int {
+    let dep_before: Closure = two_inputs(500, 900)
+    let dep_after: Closure = two_inputs(500, 901)
+
+    let app_before: Closure = closure_of(
+        1000, slot_live(), identity_of(dep_before), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let app_after: Closure = closure_of(
+        1000, slot_live(), identity_of(dep_after), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(dep_before), identity_of(dep_after))
+    failures = failures + expect_ne_int(identity_of(app_before), identity_of(app_after))
+    return failures
+}
+
+# And a dependency that did not change leaves its dependent alone.
+fn test_an_unchanged_dependency_leaves_its_dependent_alone() -> Int {
+    let dep: Closure = two_inputs(500, 900)
+    let again: Closure = two_inputs(500, 900)
+    let app_a: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let app_b: Closure = closure_of(
+        1000, slot_live(), identity_of(again), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let mut failures = 0
+    failures = failures + expect_eq_int(identity_of(app_a), identity_of(app_b))
+    return failures
+}
+
+# ------------------------------------------------------------- refusals
+
+fn test_an_empty_closure_is_refused_naming_the_toolchain() -> Int {
+    let empty: Closure = closure_of(0, slot_empty(), 0, slot_empty(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let result: Derivation = derive(empty)
+    let mut failures = 0
+    failures = failures + expect_eq_int(derivation_kind(result), 2)
+    failures = failures + expect_eq_int(derivation_payload(result), tool())
+    return failures
+}
+
+# A live slot holding the reserved absent digest would be indistinguishable
+# from an empty one, so a real input could vanish without changing the
+# identity. Refused, naming the slot.
+fn test_a_reserved_digest_in_a_live_slot_is_refused() -> Int {
+    let bad: Closure = closure_of(500, slot_live(), absent_digest(), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), settings())
+    let result: Derivation = derive(bad)
+    let mut failures = 0
+    failures = failures + expect_eq_int(derivation_kind(result), 3)
+    failures = failures + expect_eq_int(derivation_payload(result), 2)
+    return failures
+}
+
+fn test_derive_is_total() -> Int {
+    let mut failures = 0
+    failures = failures + expect_between_int(
+        derivation_kind(derive(two_inputs(1, 2))), 1, 3)
+    failures = failures + expect_between_int(
+        derivation_kind(derive(closure_of(0, slot_empty(), 0, slot_empty(),
+            0, slot_empty(), 0, slot_empty(), 0, 0))), 1, 3)
+    failures = failures + expect_between_int(
+        derivation_kind(derive(closure_of(0 - 5, slot_live(), 0, slot_empty(),
+            0, slot_empty(), 0, slot_empty(), tool(), settings()))), 1, 3)
+    return failures
+}

@@ -117,6 +117,83 @@ test "$original" = "$reordered" ||
   original:  $original
   reordered: $reordered"
 
+# ================================================== derivation identity
+#
+# ADR 4's three properties, read out of the recorded identities rather than
+# asserted about them.
+
+dcore="$ROOT/seed/derivation/core.kofun"
+dshell="$ROOT/seed/derivation/shell.kofun"
+dexpected="$ROOT/seed/derivation/derivation.stdout"
+for f in "$dcore" "$dshell" "$dexpected"; do
+    test -f "$f" || fail "missing $f"
+done
+
+sed 's/[[:space:]]*#.*$//' "$dcore" >"$WORK/dcore.code"
+grep -qE '^fn main' "$WORK/dcore.code" &&
+    fail 'the derivation core owns an entry point'
+grep -qE '^[[:space:]]*print\(' "$WORK/dcore.code" &&
+    fail 'the derivation core prints; an identity is a value, not an effect'
+grep -qE 'clock_gettime|getenv|fopen|socket\(|import ' "$WORK/dcore.code" &&
+    fail 'the derivation core names ambient state — the closure would be incomplete'
+
+dseed="$WORK/derivation.unit.kofun"
+cat "$dcore" >"$dseed"
+printf '\n' >>"$dseed"
+cat "$dshell" >>"$dseed"
+
+"$KOFUN" build "$dseed" -o "$WORK/derivation" >"$WORK/dbuild.out" 2>"$WORK/dbuild.err" ||
+    fail "the derivation seed did not build: $(cat "$WORK/dbuild.err")"
+"$WORK/derivation" >"$WORK/dbackend.out"
+cmp "$dexpected" "$WORK/dbackend.out" ||
+    fail 'C11 backend output differs from the recorded identities'
+"$KOFUN" run "$dseed" >"$WORK/dreference.out" 2>"$WORK/drun.err" ||
+    fail "the derivation seed did not run: $(cat "$WORK/drun.err")"
+cmp "$dexpected" "$WORK/dreference.out" ||
+    fail 'reference executor and C11 backend disagree on an identity'
+env -i "$WORK/derivation" >"$WORK/dbare.out"
+cmp "$WORK/dbackend.out" "$WORK/dbare.out" ||
+    fail 'an identity changed with an empty environment'
+
+# One label, kind, identity per line after the bound. Read the relationships,
+# because the numbers themselves are a projection of sha256 and their values
+# are not the claim — their relationships are.
+id_of() {
+    grep -v '^$' "$dexpected" | tail -n +2 | paste - - - |
+        awk -F'\t' -v want="$1" '$1 == want { print $3 }'
+}
+kind_of() {
+    grep -v '^$' "$dexpected" | tail -n +2 | paste - - - |
+        awk -F'\t' -v want="$1" '$1 == want { print $2 }'
+}
+
+test "$(sed -n '1p' "$dexpected")" = 4 ||
+    fail 'the recorded input bound is not the one the core declares'
+
+# Order-independence: the same two sources in the other order.
+test "$(id_of 2)" = "$(id_of 3)" ||
+    fail "the same inputs in another order produced different identities:
+  $(id_of 2) and $(id_of 3)"
+
+# Completeness: one source byte moves and the identity moves with it.
+test "$(id_of 2)" != "$(id_of 5)" ||
+    fail 'a changed source left the identity unmoved; the cache would serve the old build'
+
+# Transitivity: the dependent moves because its dependency did.
+test "$(id_of 4)" != "$(id_of 6)" ||
+    fail 'a changed dependency left its dependent unmoved; the closure is not transitive'
+
+# The toolchain is inside the closure.
+test "$(id_of 4)" != "$(id_of 7)" ||
+    fail 'a changed toolchain left the identity unmoved; the build is impure'
+
+# The refusals, by kind: 2 NoInputs, 3 ReservedDigest.
+test "$(kind_of 8)" = 2 || fail 'an empty closure was not refused'
+test "$(kind_of 9)" = 3 || fail 'a reserved digest in a live slot was not refused'
+
+printf 'pm: an identity is the same in any input order, and moves when any input does: PASS\n'
+printf 'pm: a change in a dependency reaches its dependent: PASS\n'
+
 printf 'pm: the core resolves without printing or reaching for the world: PASS\n'
 printf 'pm: minimal version selection, every closed outcome read by name: PASS\n'
 printf 'pm: the same requirement set in any order gives the same lock: PASS\n'

@@ -1,0 +1,304 @@
+# Input-addressed derivation identity.
+#
+# A build output is named by the digest of its complete input closure, so the
+# same inputs give the same name on every machine and a binary cache hit is
+# only possible when every input matched. That is Nix's central property, and
+# ADR 4 records why it is cheaper here than in Nix: Nix needs a sandbox
+# because C builds reach for the clock, the environment, and the filesystem,
+# and a Kofun build cannot name any of those. The sandbox's job is already
+# done by the type system.
+#
+# This file is the *structure* of that identity, not its cryptography. The
+# real mixing function is sha256; here it is a modular polynomial fold, which
+# is enough to prove the three properties that make input-addressing work and
+# is honest about being a projection. contracts/derivation.kofun holds the
+# canonical surface with Bytes digests, pinned by the gate at the compiler
+# boundary.
+#
+# The three properties, each proven by the gate rather than asserted:
+#
+#   order-independence  inputs are sorted before folding, by a network whose
+#                       comparison count does not depend on the values, so the
+#                       same set in any order gives the same identity;
+#
+#   completeness        changing any input — a source, a dependency, the
+#                       toolchain, a setting — changes the identity. An input
+#                       that could change without changing it is an input the
+#                       cache would ignore, which is how a cache serves the
+#                       wrong thing;
+#
+#   transitivity        a dependency contributes its *derivation* digest, not
+#                       its source digest, so a change deep in the graph
+#                       reaches every dependent. Hashing only direct sources
+#                       would let a rebuilt dependency go unnoticed.
+
+# ------------------------------------------------------------- constants
+
+# A prime modulus keeps the fold inside Int without wrapping, and a prime
+# multiplier makes position matter — a plain sum would be order-independent
+# for the wrong reason and would collide on any permutation.
+fn mix_modulus() -> Int {
+    return 1000003
+}
+
+fn mix_multiplier() -> Int {
+    return 31
+}
+
+fn input_capacity() -> Int {
+    return 4
+}
+
+fn slot_empty() -> Int {
+    return 0
+}
+
+fn slot_live() -> Int {
+    return 1
+}
+
+# The absent-input digest. A slot that holds no input must contribute the same
+# thing every time, and it must not collide with a real digest — 0 is
+# reserved and no artifact may digest to it.
+fn absent_digest() -> Int {
+    return 0
+}
+
+# ---------------------------------------------------------------- values
+
+# One input to a build: a source, or a dependency's derivation.
+#
+# `digest` is what the input *is*. For a source that is the digest of its
+# bytes; for a dependency it is that dependency's derivation identity, which
+# is what makes the closure transitive.
+type Input = {
+    digest: Int,
+    state: Int,
+}
+
+# The complete closure of one build.
+#
+# `toolchain` and `settings` are not optional and are not inputs among the
+# others: they are always present, so they fold in at fixed positions rather
+# than competing for a slot. A build whose toolchain was outside the closure
+# is a build whose cache can be wrong, which is the whole price of the
+# property.
+type Closure = {
+    i0_digest: Int,
+    i0_state: Int,
+    i1_digest: Int,
+    i1_state: Int,
+    i2_digest: Int,
+    i2_state: Int,
+    i3_digest: Int,
+    i3_state: Int,
+    toolchain: Int,
+    settings: Int,
+}
+
+# What a closure resolves to. `Derived` carries the identity; the refusals
+# carry what was observed.
+type Derivation =
+    | Derived(identity: Int)
+    | NoInputs(toolchain: Int)
+    | ReservedDigest(slot: Int)
+
+fn derivation_kind(derivation: Derivation) -> Int {
+    let mut kind = 0
+    match derivation {
+        Derived(_) => { kind = 1 },
+        NoInputs(_) => { kind = 2 },
+        ReservedDigest(_) => { kind = 3 },
+    }
+    return kind
+}
+
+fn derivation_payload(derivation: Derivation) -> Int {
+    let mut payload = 0
+    match derivation {
+        Derived(identity) => { payload = identity },
+        NoInputs(toolchain) => { payload = toolchain },
+        ReservedDigest(slot) => { payload = slot },
+    }
+    return payload
+}
+
+# --------------------------------------------------------- canonical order
+
+fn smaller(left: Int, right: Int) -> Int {
+    if left < right {
+        return left
+    }
+    return right
+}
+
+fn larger(left: Int, right: Int) -> Int {
+    if left > right {
+        return left
+    }
+    return right
+}
+
+# A live slot contributes its digest; an empty one contributes the reserved
+# absent digest, which sorts first and folds identically every time.
+fn slot_value(digest: Int, state: Int) -> Int {
+    return state * digest
+}
+
+# The sorted closure, as four values.
+#
+# A five-comparator sorting network for four elements. Its comparison count
+# and its control flow do not depend on the values, so two closures holding
+# the same inputs in different slots cannot take different paths to the same
+# answer — they take the *same* path. That is what order-independence means
+# here, and it is the same discipline the resolver uses.
+fn sorted_0(closure: Closure) -> Int {
+    let a: Int = slot_value(closure.i0_digest, closure.i0_state)
+    let b: Int = slot_value(closure.i1_digest, closure.i1_state)
+    let c: Int = slot_value(closure.i2_digest, closure.i2_state)
+    let d: Int = slot_value(closure.i3_digest, closure.i3_state)
+    let ab_low: Int = smaller(a, b)
+    let cd_low: Int = smaller(c, d)
+    return smaller(ab_low, cd_low)
+}
+
+fn sorted_1(closure: Closure) -> Int {
+    let a: Int = slot_value(closure.i0_digest, closure.i0_state)
+    let b: Int = slot_value(closure.i1_digest, closure.i1_state)
+    let c: Int = slot_value(closure.i2_digest, closure.i2_state)
+    let d: Int = slot_value(closure.i3_digest, closure.i3_state)
+    let ab_low: Int = smaller(a, b)
+    let ab_high: Int = larger(a, b)
+    let cd_low: Int = smaller(c, d)
+    let cd_high: Int = larger(c, d)
+    let outer_high: Int = larger(ab_low, cd_low)
+    let inner_low: Int = smaller(ab_high, cd_high)
+    return smaller(outer_high, inner_low)
+}
+
+fn sorted_2(closure: Closure) -> Int {
+    let a: Int = slot_value(closure.i0_digest, closure.i0_state)
+    let b: Int = slot_value(closure.i1_digest, closure.i1_state)
+    let c: Int = slot_value(closure.i2_digest, closure.i2_state)
+    let d: Int = slot_value(closure.i3_digest, closure.i3_state)
+    let ab_low: Int = smaller(a, b)
+    let ab_high: Int = larger(a, b)
+    let cd_low: Int = smaller(c, d)
+    let cd_high: Int = larger(c, d)
+    let outer_high: Int = larger(ab_low, cd_low)
+    let inner_low: Int = smaller(ab_high, cd_high)
+    return larger(outer_high, inner_low)
+}
+
+fn sorted_3(closure: Closure) -> Int {
+    let a: Int = slot_value(closure.i0_digest, closure.i0_state)
+    let b: Int = slot_value(closure.i1_digest, closure.i1_state)
+    let c: Int = slot_value(closure.i2_digest, closure.i2_state)
+    let d: Int = slot_value(closure.i3_digest, closure.i3_state)
+    let ab_high: Int = larger(a, b)
+    let cd_high: Int = larger(c, d)
+    return larger(ab_high, cd_high)
+}
+
+# ---------------------------------------------------------------- the fold
+
+# One step of a positional fold. Modular so the result stays inside Int, and
+# multiplicative so position matters — a sum would make the identity
+# insensitive to which input was which, and two closures that differ only by a
+# swap would share a cache entry.
+fn mix(accumulator: Int, value: Int) -> Int {
+    return (accumulator * mix_multiplier() + value) % mix_modulus()
+}
+
+fn live_inputs(closure: Closure) -> Int {
+    return closure.i0_state
+        + closure.i1_state
+        + closure.i2_state
+        + closure.i3_state
+}
+
+# A live slot whose digest is the reserved absent value would be
+# indistinguishable from an empty one, which would let a real input vanish
+# from the closure without changing the identity. Refused, naming the slot.
+fn reserved_slot(closure: Closure) -> Int {
+    if closure.i0_state == slot_live() {
+        if closure.i0_digest == absent_digest() {
+            return 1
+        }
+    }
+    if closure.i1_state == slot_live() {
+        if closure.i1_digest == absent_digest() {
+            return 2
+        }
+    }
+    if closure.i2_state == slot_live() {
+        if closure.i2_digest == absent_digest() {
+            return 3
+        }
+    }
+    if closure.i3_state == slot_live() {
+        if closure.i3_digest == absent_digest() {
+            return 4
+        }
+    }
+    return 0
+}
+
+# The identity of a build.
+#
+# The order is the contract and the gate reads it: a reserved digest is
+# refused before the closure is counted, and an empty closure is refused
+# before anything is folded. So a malformed closure never produces an
+# identity that looks usable.
+fn derive(closure: Closure) -> Derivation {
+    let reserved: Int = reserved_slot(closure)
+    if reserved > 0 {
+        return ReservedDigest(reserved)
+    }
+    if live_inputs(closure) == 0 {
+        return NoInputs(closure.toolchain)
+    }
+    # Sorted inputs first, then the toolchain, then the settings. The last two
+    # are at fixed positions because they are always present; putting them
+    # through the sort would let a toolchain digest trade places with a source
+    # digest and produce the same identity for two different builds.
+    let after_inputs: Int = mix(
+        mix(mix(mix(1, sorted_0(closure)), sorted_1(closure)),
+            sorted_2(closure)),
+        sorted_3(closure)
+    )
+    let after_toolchain: Int = mix(after_inputs, closure.toolchain)
+    return Derived(mix(after_toolchain, closure.settings))
+}
+
+# ------------------------------------------------------------ constructors
+
+fn closure_of(
+    d0: Int, s0: Int,
+    d1: Int, s1: Int,
+    d2: Int, s2: Int,
+    d3: Int, s3: Int,
+    toolchain: Int,
+    settings: Int
+) -> Closure {
+    let value: Closure = Closure(
+        i0_digest: d0,
+        i0_state: s0,
+        i1_digest: d1,
+        i1_state: s1,
+        i2_digest: d2,
+        i2_state: s2,
+        i3_digest: d3,
+        i3_state: s3,
+        toolchain: toolchain,
+        settings: settings
+    )
+    return value
+}
+
+# The identity a closure resolves to, as an Int, for use as a dependency's
+# contribution to another closure. This is what makes the graph transitive: a
+# dependent folds in this number, not the dependency's source digest.
+fn identity_of(closure: Closure) -> Int {
+    return derivation_payload(derive(closure))
+}

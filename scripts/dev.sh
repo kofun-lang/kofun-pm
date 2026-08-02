@@ -17,14 +17,17 @@ KOTEST="$ROOT/vendor/kofun/tooling/kotest/run.sh"
 case "${1:-}" in
     --test)
         shift
-        sh "$KOTEST" "$ROOT/seed/resolver/core_test.kofun" "$@"
+        sh "$KOTEST" "$ROOT/seed/resolver/core_test.kofun" \
+            "$ROOT/seed/derivation/core_test.kofun" "$@"
         ;;
     --watch)
         shift
-        sh "$KOTEST" --watch "$ROOT/seed/resolver/core_test.kofun" "$@"
+        sh "$KOTEST" --watch "$ROOT/seed/resolver/core_test.kofun" \
+            "$ROOT/seed/derivation/core_test.kofun" "$@"
         ;;
     --check|"")
-        sh "$KOTEST" "$ROOT/seed/resolver/core_test.kofun"
+        sh "$KOTEST" "$ROOT/seed/resolver/core_test.kofun" \
+            "$ROOT/seed/derivation/core_test.kofun"
         sh "$ROOT/tests/pm/check.sh"
         ;;
     *)

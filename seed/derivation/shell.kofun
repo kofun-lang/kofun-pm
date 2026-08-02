@@ -1,0 +1,82 @@
+# The derivation shell: a small dependency graph, and the identities it
+# produces.
+#
+# Three integers per line — a label, the outcome kind, and the identity — so
+# the golden records what each closure resolved to and the gate can read the
+# relationships between them rather than only their values.
+
+fn emit(label: Int, closure: Closure) -> Int {
+    let result: Derivation = derive(closure)
+    print(label)
+    print(derivation_kind(result))
+    print(derivation_payload(result))
+    return 0
+}
+
+fn main() -> Int {
+    # The bound this projection derives within, printed so the golden records
+    # it: a reader of the output knows what it was bounded by without opening
+    # the source.
+    print(input_capacity())
+
+    let tool: Int = 7001
+    let settings: Int = 42
+
+    # A leaf: one source.
+    let leaf: Closure = closure_of(
+        500, slot_live(),
+        0, slot_empty(),
+        0, slot_empty(),
+        0, slot_empty(),
+        tool, settings
+    )
+    emit(1, leaf)
+
+    # A dependency with two sources, and the same two in the other order. The
+    # golden carries both, so order-independence is a fact in the recorded
+    # output rather than a claim in a comment.
+    let dep: Closure = closure_of(
+        500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(2, dep)
+    let dep_reordered: Closure = closure_of(
+        900, slot_live(), 500, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(3, dep_reordered)
+
+    # An application over that dependency's *derivation*, which is what makes
+    # the closure transitive.
+    let app: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(4, app)
+
+    # One byte of the dependency's source moves. Its identity moves, and the
+    # application's moves with it.
+    let dep_changed: Closure = closure_of(
+        500, slot_live(), 901, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(5, dep_changed)
+    let app_rebuilt: Closure = closure_of(
+        1000, slot_live(), identity_of(dep_changed), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(6, app_rebuilt)
+
+    # The toolchain moves and nothing else. Every identity moves, which is why
+    # the toolchain is not optional in the closure.
+    let app_new_tool: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), 7002, settings)
+    emit(7, app_new_tool)
+
+    # The refusals.
+    let empty: Closure = closure_of(
+        0, slot_empty(), 0, slot_empty(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(8, empty)
+    let reserved: Closure = closure_of(
+        500, slot_live(), absent_digest(), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool, settings)
+    emit(9, reserved)
+    return 0
+}

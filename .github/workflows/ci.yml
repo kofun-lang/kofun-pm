@@ -19,7 +19,10 @@ jobs:
           submodules: true
       - name: Report the pinned language revision
         run: git -C vendor/kofun log -1 --format='vendor/kofun is at %h %s'
-      - run: sh vendor/kofun/tooling/kotest/run.sh seed/resolver/core_test.kofun
+      - name: Resolver
+        run: sh vendor/kofun/tooling/kotest/run.sh seed/resolver/core_test.kofun
+      - name: Derivation identity
+        run: sh vendor/kofun/tooling/kotest/run.sh seed/derivation/core_test.kofun
 
   gate:
     name: Resolver gate
