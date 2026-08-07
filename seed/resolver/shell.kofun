@@ -57,6 +57,45 @@ fn emit_why(
     return 0
 }
 
+fn emit_workspace(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
+    module: Int
+) -> Int {
+    let result: Resolution = resolve_workspace(
+        direct, inherited, members, workspace, registry, module
+    )
+    print(module)
+    print(resolution_kind(result))
+    print(resolution_payload(result))
+    print(highest_published(registry, module))
+    return 0
+}
+
+fn emit_why_workspace(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
+    module: Int
+) -> Int {
+    let answer: Why = why_workspace(
+        direct, inherited, members, workspace, registry, module
+    )
+    print(module)
+    print(answer.kind)
+    print(answer.resolution)
+    print(answer.version)
+    print(answer.requirer)
+    print(answer.agreeing)
+    print(answer.others)
+    return 0
+}
+
 fn emit_why_flat(
     registry: Registry,
     requirements: Requirements,
@@ -227,5 +266,54 @@ fn main() -> Int {
     # A refusal has a reason, but not a selection — so the explanation names
     # the resolution and declines to invent a bound.
     emit_why_flat(registry, excessive, 20)
+
+    # --- workspace members
+    #
+    # The bound this projection resolves within, recorded beside the decisions
+    # it bounds rather than in the header, so the line numbers every assertion
+    # above reads by do not move.
+    print(workspace_capacity())
+
+    # The workspace provides 20 and 40. 20 is *also* published — that is the
+    # point: a member must win over the registry, or publishing a package
+    # could take over a name the workspace owns. 40 is published nowhere,
+    # which is the ordinary case and must work just as well.
+    let workspace: Workspace = workspace_of(
+        20, slot_live(),
+        40, slot_live()
+    )
+
+    # A member is a package like any other as far as its own requirements go:
+    # 40 needs 10 at v6, which is higher than anything the app or the
+    # dependency asked for, so it raises the selection.
+    let member_reqs: Requirements = requirements_of(
+        10, 1, 6, slot_live(), 40,
+        40, 1, 1, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
+    )
+
+    # A member's requirements join the set, and the maximum rises to meet
+    # them: 2 from the app, 5 from the dependency, 6 from the member.
+    emit_workspace(registry, direct, inherited, member_reqs, workspace, 10)
+    # A member that is also published resolves to the workspace, not to v3.
+    emit_workspace(registry, direct, inherited, member_reqs, workspace, 20)
+    # A member nobody publishes resolves just the same. If the registry were
+    # consulted first this would be Unpublished, which is the bug.
+    emit_workspace(registry, direct, inherited, member_reqs, workspace, 40)
+    # A module that is not a member is unaffected by the workspace.
+    emit_workspace(registry, direct, inherited, member_reqs, workspace, 30)
+    # The control: the same query with no workspace at all. 20 is then an
+    # ordinary dependency and gets a version, which is what makes the line
+    # above a claim about membership rather than about module 20.
+    emit_workspace(
+        registry, direct, inherited, member_reqs, no_workspace(), 20
+    )
+
+    # Explained: the member is the reason for v6, and a member itself is
+    # explained by where it comes from rather than by a bound.
+    emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 10)
+    emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 20)
+    emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 40)
     return 0
 }

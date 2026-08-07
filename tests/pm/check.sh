@@ -211,9 +211,73 @@ for start in 58 65 72 79 86 93 100 107; do
 done
 
 # Order-independence over the flat set, likewise read rather than trusted.
+# --- workspace members
+#
+# Two rules that pull in opposite directions, so both are read: a member's
+# requirements join the set, and a member is never fetched.
+# Kind 6 Member.
+
+check 'the workspace bound this projection resolves within' 128 128 '2 '
+
+# A member is a package like any other as far as its own dependencies go: 40
+# needs v6, above both the app's v2 and the dependency's v5, so the maximum
+# rises to meet it. The union again, and the same rule.
+check 'a member'"'"'s requirements join the set and raise the maximum' \
+    129 132 '10 1 6 7 '
+
+# The registry publishes 20 up to v3. The workspace wins, and it must: if the
+# registry decided, publishing a package could take over a name the workspace
+# owns.
+check 'a member that is also published resolves to the workspace, not to v3' \
+    133 136 '20 6 20 3 '
+# Ceiling 0 — nobody publishes 40. Were the registry consulted first this
+# would be Unpublished, which is the bug this ordering exists to prevent.
+check 'a member nobody publishes resolves just the same' \
+    137 140 '40 6 40 0 '
+check 'a module that is not a member is unaffected by the workspace' \
+    141 144 '30 1 1 1 '
+# The control. Without this line the assertion above would be a claim about
+# module 20 rather than about membership.
+check 'the same module without a workspace is an ordinary dependency' \
+    145 148 '20 1 1 3 '
+
+member_resolved=$(field 133 136 | awk '{print $2}')
+plain_resolved=$(field 145 148 | awk '{print $2}')
+test "$member_resolved" != "$plain_resolved" ||
+    fail "membership changed nothing: module 20 resolved the same way with and
+  without the workspace, so the member rule is not being applied"
+
+# A member is never fetched, read as the property rather than as two lines: no
+# workspace member may resolve to a version, whatever the registry holds.
+for start in 133 137; do
+    kind=$(field "$start" "$((start + 3))" | awk '{print $2}')
+    test "$kind" -eq 6 ||
+        fail "a workspace member at line $start resolved to kind $kind; a member has no version to select"
+done
+
+# Explained: the member is the reason for v6, and a member itself is explained
+# by where it comes from rather than by a bound. Kind 4 Local.
+check 'the member is named as the reason its bound decided the answer' \
+    149 155 '10 1 1 6 40 1 2 '
+check 'a member is explained as local, not as unresolved' \
+    156 162 '20 4 6 0 0 0 0 '
+check 'and so is one nobody publishes' \
+    163 169 '40 4 6 0 0 0 0 '
+
+# The explanation must not send a reader looking for a requirement to change
+# that does not exist. Local is a different answer from unresolved, and the
+# resolution it carries must be the member outcome rather than a refusal.
+for start in 156 163; do
+    row=$(field "$start" "$((start + 6))")
+    test "$(printf '%s' "$row" | awk '{print $2}')" -eq 4 ||
+        fail "a member at line $start was not explained as local"
+    test "$(printf '%s' "$row" | awk '{print $3}')" -eq 6 ||
+        fail "a local explanation at line $start does not carry the member outcome"
+done
+
 lines=$(wc -l <"$WORK/backend.out" | tr -d ' ')
-test "$lines" -eq 127 ||
-    fail "recorded decisions cover the whole run: expected 127 lines, got $lines"
+test "$lines" -eq 169 ||
+    fail "recorded decisions cover the whole run: expected 169 lines, got $lines"
 
 # Every named decision passed, so a difference here is a line no assertion
 # owns. Checked last, and against the run rather than the other way round.
@@ -359,4 +423,5 @@ printf 'pm: the same requirement set in any order gives the same lock: PASS\n'
 printf 'pm: a transitive bound only ever rises, so one pass is the whole answer: PASS\n'
 printf 'pm: a selection is explained by the bound that decided it, and the explanation agrees: PASS\n'
 printf 'pm: the explanation is order-independent, as the selection is: PASS\n'
+printf 'pm: a member joins the requirement set and is never fetched: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'
