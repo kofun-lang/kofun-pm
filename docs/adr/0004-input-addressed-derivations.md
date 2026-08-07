@@ -83,3 +83,8 @@ everything downstream, even though the output is identical. Nix has the same
 issue and answers it with content-addressed derivations, which are a later and
 much harder decision; this ADR chooses the simpler scheme and names the
 successor rather than pretending the issue is absent.
+
+[ADR 6](0006-content-addressed-derivations-deferred.md) takes that successor up
+and defers it, listing the four things that would have to be true first — the
+most load-bearing of which is that this cost has been *measured* rather than
+assumed.
