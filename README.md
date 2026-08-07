@@ -34,8 +34,9 @@ surface and the gate requires it to keep failing at the compiler boundary,
 because the framework's action set is four fixed contracts and its reference
 says so plainly. The restriction is tighter than it reads: an action fixes its
 option *names*, so a surface cannot be declared even around placeholder
-actions. That is issue #7. This repository does not ship a CLI whose commands
-do nothing.
+actions. Binding them is [P5](https://github.com/kofun-lang/kofun-pm/issues/5),
+and it waits on the framework rather than on this repository. `kpm` does not
+ship a CLI whose commands do nothing.
 
 ## Eight decisions, each with what it costs
 
