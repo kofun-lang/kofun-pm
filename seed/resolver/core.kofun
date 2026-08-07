@@ -27,9 +27,11 @@
 # bounded projection. Each carries what was observed.
 #
 # The canonical surface — a List of requirements, Text module names, semver —
-# is contracts/resolver.kofun, pinned by the gate at the compiler boundary.
-# Here a module is a code and a version is an Int, which is the same
-# resolution with a smaller vocabulary.
+# does not exist yet; `contracts/` holds the CLI surface alone. This file is
+# therefore the only statement of the rule, which is why the gate reads every
+# decision it makes rather than pinning it against a richer declaration the way
+# the other repositories do. Here a module is a code and a version is an Int,
+# which is the same resolution with a smaller vocabulary.
 
 # ------------------------------------------------------------- constants
 
@@ -43,6 +45,13 @@ fn registry_capacity() -> Int {
 
 fn slot_empty() -> Int {
     return 0
+}
+
+# The root package: the manifest being resolved. It is a requirer like any
+# other — its requirements are lower bounds and carry no special weight — but
+# it is the one an explanation names most often, so it has a name.
+fn app() -> Int {
+    return 1
 }
 
 fn slot_live() -> Int {
@@ -99,10 +108,18 @@ type Registry = {
 # One requirement: some package says it needs at least this version of that
 # module. "At least" is the whole semantics; a requirement is a lower bound
 # and never an upper one.
+#
+# `requirer` is who said it. It is carried because a selection is only
+# explainable if the bounds remember their authors: "v5" is an answer, and
+# "v5 because X requires >= 5" is the answer to the question anyone actually
+# asks. A solver cannot produce that sentence without narrating its search;
+# here it is a lookup, because the rule is a maximum and the explanation is
+# whichever input achieved it.
 type Requirement = {
     module: Int,
     minimum: Int,
     state: Int,
+    requirer: Int,
 }
 
 type Requirements = {
@@ -110,18 +127,22 @@ type Requirements = {
     r0_major: Int,
     r0_minimum: Int,
     r0_state: Int,
+    r0_requirer: Int,
     r1_module: Int,
     r1_major: Int,
     r1_minimum: Int,
     r1_state: Int,
+    r1_requirer: Int,
     r2_module: Int,
     r2_major: Int,
     r2_minimum: Int,
     r2_state: Int,
+    r2_requirer: Int,
     r3_module: Int,
     r3_major: Int,
     r3_minimum: Int,
     r3_state: Int,
+    r3_requirer: Int,
 }
 
 # The closed resolution domain.
@@ -422,33 +443,234 @@ fn resolve_closure(
     return Selected(demanded)
 }
 
+# --------------------------------------------------------------- why
+#
+# "Why v5?" — "because X requires >= 5."
+#
+# That sentence is the reason to prefer a maximum over a search, and it is
+# worth being precise about why it is available here and not elsewhere. A
+# solver's answer to the same question is a history: these constraints were
+# tried, this one was relaxed, this assignment survived. The answer depends on
+# the search, so explaining it means replaying the search, and the explanation
+# is as long as the work was.
+#
+# Under MVS the selection *is* one of the inputs. So the explanation is a
+# lookup — which requirement achieved the maximum — and it is complete: every
+# other bound is below it, which is exactly what "maximum" means and why no
+# other requirement needs mentioning to justify the answer.
+#
+# Two details make the answer honest rather than merely available.
+#
+# Ties are reported, not hidden. Several packages may state the same binding
+# bound, and an explanation naming one of them as *the* reason would suggest
+# removing it would lower the selection. `agreeing` says how many stated it.
+#
+# The named requirer does not depend on order. Naming "the first slot at the
+# maximum" would make the explanation depend on how the set was assembled,
+# which is the property this whole resolver exists to avoid — the selection
+# would be order-independent and its explanation would not. So the smallest
+# requirer code among those at the maximum is named, which is a function of
+# the set rather than of its arrangement.
+
+fn why_because() -> Int {
+    return 1
+}
+
+fn why_unrequired() -> Int {
+    return 2
+}
+
+fn why_unresolved() -> Int {
+    return 3
+}
+
+# No requirer. Above every real code, so `smaller` treats it as the absence it
+# is without a branch at every slot.
+fn no_requirer() -> Int {
+    return 999999
+}
+
+fn smaller(left: Int, right: Int) -> Int {
+    if left < right {
+        return left
+    }
+    return right
+}
+
+# The explanation, as a record beside the closed Resolution rather than as
+# payloads on it. A resolution answers what; this answers why, and the two are
+# separate questions asked of the same rule.
+type Why = {
+    kind: Int,
+    resolution: Int,
+    version: Int,
+    requirer: Int,
+    agreeing: Int,
+    others: Int,
+}
+
+# One slot's requirer, if that slot is live, names this module, and states
+# exactly the binding bound. Otherwise the absence sentinel.
+fn requirer_at(
+    state: Int,
+    slot_module: Int,
+    minimum: Int,
+    requirer: Int,
+    module: Int,
+    bound: Int
+) -> Int {
+    if state * eq(slot_module, module) * eq(minimum, bound) == 1 {
+        return requirer
+    }
+    return no_requirer()
+}
+
+# Who stated the binding bound. The smallest such requirer code, so the answer
+# is a function of the set and not of the order it was built in.
+fn binding_requirer(requirements: Requirements, module: Int, bound: Int) -> Int {
+    let a: Int = requirer_at(
+        requirements.r0_state, requirements.r0_module,
+        requirements.r0_minimum, requirements.r0_requirer, module, bound
+    )
+    let b: Int = requirer_at(
+        requirements.r1_state, requirements.r1_module,
+        requirements.r1_minimum, requirements.r1_requirer, module, bound
+    )
+    let c: Int = requirer_at(
+        requirements.r2_state, requirements.r2_module,
+        requirements.r2_minimum, requirements.r2_requirer, module, bound
+    )
+    let d: Int = requirer_at(
+        requirements.r3_state, requirements.r3_module,
+        requirements.r3_minimum, requirements.r3_requirer, module, bound
+    )
+    return smaller(smaller(a, b), smaller(c, d))
+}
+
+# How many live requirements for this module state exactly the binding bound.
+# One means a single package decided the answer; more means removing any one
+# of them would not lower it.
+fn agreeing_count(requirements: Requirements, module: Int, bound: Int) -> Int {
+    return requirements.r0_state * eq(requirements.r0_module, module)
+            * eq(requirements.r0_minimum, bound)
+        + requirements.r1_state * eq(requirements.r1_module, module)
+            * eq(requirements.r1_minimum, bound)
+        + requirements.r2_state * eq(requirements.r2_module, module)
+            * eq(requirements.r2_minimum, bound)
+        + requirements.r3_state * eq(requirements.r3_module, module)
+            * eq(requirements.r3_minimum, bound)
+}
+
+fn why_of(
+    direct: Requirements,
+    inherited: Requirements,
+    registry: Registry,
+    module: Int
+) -> Why {
+    let resolution: Resolution = resolve_closure(
+        direct, inherited, registry, module
+    )
+    let kind: Int = resolution_kind(resolution)
+
+    # Nothing requires it, so there is no bound to point at. Answered first,
+    # for the same reason `resolve` answers it first: a question about an
+    # unrequired module must not learn anything about the registry.
+    if kind == outcome_unrequired() {
+        let absent: Why = Why(
+            kind: why_unrequired(),
+            resolution: kind,
+            version: 0,
+            requirer: 0,
+            agreeing: 0,
+            others: 0
+        )
+        return absent
+    }
+
+    # A refusal has a reason, but not *this* reason: there is no selection to
+    # explain. Saying so is better than naming a bound that decided nothing.
+    if kind != outcome_selected() {
+        let refused: Why = Why(
+            kind: why_unresolved(),
+            resolution: kind,
+            version: 0,
+            requirer: 0,
+            agreeing: 0,
+            others: 0
+        )
+        return refused
+    }
+
+    let bound: Int = maximum_across(direct, inherited, module)
+    let agreeing: Int = agreeing_count(direct, module, bound)
+        + agreeing_count(inherited, module, bound)
+    let stated: Int = requirement_count(direct, module)
+        + requirement_count(inherited, module)
+    let explanation: Why = Why(
+        kind: why_because(),
+        resolution: kind,
+        version: bound,
+        requirer: smaller(
+            binding_requirer(direct, module, bound),
+            binding_requirer(inherited, module, bound)
+        ),
+        agreeing: agreeing,
+        # The bounds that did not decide the answer — what `kpm why --all`
+        # would list. They are not part of the justification, which is the
+        # point: a maximum is justified by one input.
+        others: stated - agreeing
+    )
+    return explanation
+}
+
+# The flat case, as the closure with nothing inherited. One rule, not two.
+fn why(requirements: Requirements, registry: Registry, module: Int) -> Why {
+    return why_of(requirements, no_requirements(), registry, module)
+}
+
 # ------------------------------------------------------------ constructors
 
 fn requirements_of(
-    m0: Int, j0: Int, v0: Int, s0: Int,
-    m1: Int, j1: Int, v1: Int, s1: Int,
-    m2: Int, j2: Int, v2: Int, s2: Int,
-    m3: Int, j3: Int, v3: Int, s3: Int
+    m0: Int, j0: Int, v0: Int, s0: Int, q0: Int,
+    m1: Int, j1: Int, v1: Int, s1: Int, q1: Int,
+    m2: Int, j2: Int, v2: Int, s2: Int, q2: Int,
+    m3: Int, j3: Int, v3: Int, s3: Int, q3: Int
 ) -> Requirements {
     let value: Requirements = Requirements(
         r0_module: m0,
         r0_major: j0,
         r0_minimum: v0,
         r0_state: s0,
+        r0_requirer: q0,
         r1_module: m1,
         r1_major: j1,
         r1_minimum: v1,
         r1_state: s1,
+        r1_requirer: q1,
         r2_module: m2,
         r2_major: j2,
         r2_minimum: v2,
         r2_state: s2,
+        r2_requirer: q2,
         r3_module: m3,
         r3_major: j3,
         r3_minimum: v3,
-        r3_state: s3
+        r3_state: s3,
+        r3_requirer: q3
     )
     return value
+}
+
+# An empty requirement set. Named rather than spelled out at every call site,
+# because "nothing is required" is a value the explanation path needs and a
+# reader should not have to count zeroes to recognise.
+fn no_requirements() -> Requirements {
+    return requirements_of(
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
+    )
 }
 
 fn registry_of(

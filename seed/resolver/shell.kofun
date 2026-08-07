@@ -27,6 +27,52 @@ fn emit_closure(
     return 0
 }
 
+# Seven integers per explanation: the module asked about, then the six fields
+# of the answer.
+#
+#   kind        because / unrequired / unresolved
+#   resolution  the resolution being explained, so the two never drift apart
+#   version     what was selected
+#   requirer    who stated the bound that decided it
+#   agreeing    how many stated exactly that bound — a tie is visible
+#   others      the bounds that did not decide the answer; `kpm why --all`
+#
+# `agreeing` and `others` are printed for every explanation because an answer
+# that named one requirer and stopped would imply removing it lowers the
+# selection, which is true only when `agreeing` is 1.
+fn emit_why(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    module: Int
+) -> Int {
+    let answer: Why = why_of(direct, inherited, registry, module)
+    print(module)
+    print(answer.kind)
+    print(answer.resolution)
+    print(answer.version)
+    print(answer.requirer)
+    print(answer.agreeing)
+    print(answer.others)
+    return 0
+}
+
+fn emit_why_flat(
+    registry: Registry,
+    requirements: Requirements,
+    module: Int
+) -> Int {
+    let answer: Why = why(requirements, registry, module)
+    print(module)
+    print(answer.kind)
+    print(answer.resolution)
+    print(answer.version)
+    print(answer.requirer)
+    print(answer.agreeing)
+    print(answer.others)
+    return 0
+}
+
 fn main() -> Int {
     # A version is minor.patch inside one major line; the major is part of the
     # identity, so the resolver never compares across it. Printed so the
@@ -52,11 +98,15 @@ fn main() -> Int {
     # An application requiring 10 at v2, and a dependency requiring 10 at v5.
     # MVS selects 5: the larger lower bound satisfies both, and nothing was
     # resolved away.
+    #
+    # Each bound remembers who stated it, which is what makes the selection
+    # explainable: v5 is not merely the answer, it is 20's requirement, and
+    # the app's v2 did not decide anything.
     let reqs: Requirements = requirements_of(
-        10, 1, 2, slot_live(),
-        10, 1, 5, slot_live(),
-        20, 1, 3, slot_live(),
-        99, 1, 1, slot_live()
+        10, 1, 2, slot_live(), app(),
+        10, 1, 5, slot_live(), 20,
+        20, 1, 3, slot_live(), app(),
+        99, 1, 1, slot_live(), app()
     )
 
     emit(registry, reqs, 10)
@@ -67,29 +117,29 @@ fn main() -> Int {
     # The same requirement set in a different order gives the same answer.
     # Printed rather than asserted in a comment, so the golden carries it.
     let reordered: Requirements = requirements_of(
-        99, 1, 1, slot_live(),
-        20, 1, 3, slot_live(),
-        10, 1, 5, slot_live(),
-        10, 1, 2, slot_live()
+        99, 1, 1, slot_live(), app(),
+        20, 1, 3, slot_live(), app(),
+        10, 1, 5, slot_live(), 20,
+        10, 1, 2, slot_live(), app()
     )
     emit(registry, reordered, 10)
     emit(registry, reordered, 20)
 
     # A demand above everything published, carrying the demand.
     let excessive: Requirements = requirements_of(
-        20, 1, 9, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        20, 1, 9, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
     emit(registry, excessive, 20)
 
     # And the ceiling itself, which must be selectable.
     let at_ceiling: Requirements = requirements_of(
-        10, 1, 7, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        10, 1, 7, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
     emit(registry, at_ceiling, 10)
 
@@ -100,23 +150,21 @@ fn main() -> Int {
     # selection with and without that dependency, so monotonicity is a fact in
     # the golden rather than a claim in a comment.
     let direct: Requirements = requirements_of(
-        10, 1, 2, slot_live(),
-        20, 1, 1, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        10, 1, 2, slot_live(), app(),
+        20, 1, 1, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
+    # Inherited bounds are 20's, not the app's. That is the difference `why`
+    # exists to report: the app never asked for 10 at v5, and a reader looking
+    # at the lock needs to know whose requirement moved it.
     let inherited: Requirements = requirements_of(
-        10, 1, 5, slot_live(),
-        30, 1, 1, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        10, 1, 5, slot_live(), 20,
+        30, 1, 1, slot_live(), 20,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
-    let nothing: Requirements = requirements_of(
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
-    )
+    let nothing: Requirements = no_requirements()
 
     emit_closure(registry, direct, nothing, 10)
     emit_closure(registry, direct, inherited, 10)
@@ -125,5 +173,59 @@ fn main() -> Int {
     # Swapping the two sets must change nothing: a bound is a bound whichever
     # side it was found on.
     emit_closure(registry, inherited, direct, 10)
+
+    # --- why
+    #
+    # The selection explained as the maximum it is. Recorded beside the
+    # resolutions above so the golden carries both: an explanation that
+    # disagreed with the decision it explains would be worse than none, and
+    # the gate reads them from the same output.
+
+    # v5, because 20 required it. The app asked for v2 and did not decide the
+    # answer — which is the sentence a lock diff needs and the one a solver
+    # cannot produce without replaying its search.
+    emit_why_flat(registry, reqs, 10)
+
+    # The same explanation from the reordered set. Naming "the first slot at
+    # the maximum" would answer differently here; naming the smallest requirer
+    # among those at the maximum does not, so the explanation is a function of
+    # the set exactly as the selection is.
+    emit_why_flat(registry, reordered, 10)
+
+    # A bound stated by only the app, with nothing else in play.
+    emit_why_flat(registry, at_ceiling, 10)
+
+    # A tie, with the larger requirer code in the earlier slot. This is the
+    # arrangement that separates "the smallest requirer at the maximum" from
+    # "the first slot at the maximum" — under the second rule the two lines
+    # below differ, and the explanation would depend on how the set was built
+    # while the selection did not.
+    let tied: Requirements = requirements_of(
+        10, 1, 5, slot_live(), 30,
+        10, 1, 5, slot_live(), 20,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
+    )
+    let tied_reordered: Requirements = requirements_of(
+        10, 1, 5, slot_live(), 20,
+        10, 1, 5, slot_live(), 30,
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
+    )
+    emit_why_flat(registry, tied, 10)
+    emit_why_flat(registry, tied_reordered, 10)
+
+    # Across the closure: the app's v2 is not the reason, 20's v5 is.
+    emit_why(registry, direct, inherited, 10)
+    # …and with the dependency absent, the app's own bound becomes the reason.
+    emit_why(registry, direct, nothing, 10)
+    # A module only the dependency requires: the app is not in the answer.
+    emit_why(registry, direct, inherited, 30)
+
+    # Nothing to explain, said as such rather than as a bound of zero.
+    emit_why(registry, direct, inherited, 99)
+    # A refusal has a reason, but not a selection — so the explanation names
+    # the resolution and declines to invent a bound.
+    emit_why_flat(registry, excessive, 20)
     return 0
 }

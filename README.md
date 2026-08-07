@@ -78,6 +78,29 @@ exactly what `seed/resolver/` does.
 project does not silently drift onto a newer dependency the day it is
 published. That is a cost only if you wanted the drift.
 
+**What it buys, beyond reproducibility:** the selection is explainable, and the
+explanation is checkable against the answer.
+
+```
+why 10  →  v5, because 20 requires >= 5
+           1 bound agreed; 1 other bound did not decide the answer
+```
+
+A solver's answer to "why this version?" is a history — these constraints were
+tried, this one was relaxed, this assignment survived — so explaining it means
+replaying the search, and the explanation is as long as the work was. Under MVS
+the selection *is* one of the inputs, so the explanation is a lookup, and it is
+complete: every other bound is below the one named, which is what "maximum"
+means.
+
+Two details keep it honest. **Ties are reported**, because an explanation naming
+one of two equal bounds would imply that removing it lowers the selection.
+And **the named requirer does not depend on slot order** — it is the smallest
+requirer code among those at the maximum, not the first one found, so the
+explanation is a function of the requirement set exactly as the selection is.
+The gate has a tie arranged with the larger code first, which is the only
+arrangement in which those two rules disagree.
+
 ### 3. One copy on disk, addressed by content
 
 pnpm's insight: a package version is immutable, so its bytes are its name.
