@@ -8,10 +8,10 @@
 
 fn empty_requirements() -> Requirements {
     return requirements_of(
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
 }
 
@@ -26,10 +26,10 @@ fn demo_registry() -> Registry {
 
 fn test_one_requirement_selects_exactly_it() -> Int {
     let reqs: Requirements = requirements_of(
-        10, 1, 2, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
@@ -42,10 +42,10 @@ fn test_one_requirement_selects_exactly_it() -> Int {
 # both. This is not a conflict and there is nothing to resolve.
 fn test_two_requirements_select_the_larger() -> Int {
     let reqs: Requirements = requirements_of(
-        10, 1, 2, 1,
-        10, 1, 5, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        10, 1, 5, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
@@ -60,24 +60,24 @@ fn test_two_requirements_select_the_larger() -> Int {
 fn test_the_answer_does_not_depend_on_order() -> Int {
     let ascending: Requirements =
         requirements_of(
-        10, 1, 1, 1,
-        10, 1, 4, 1,
-        10, 1, 6, 1,
-        0, 0, 0, 0
+        10, 1, 1, 1, 1,
+        10, 1, 4, 1, 1,
+        10, 1, 6, 1, 1,
+        0, 0, 0, 0, 0
     )
     let descending: Requirements =
         requirements_of(
-        10, 1, 6, 1,
-        10, 1, 4, 1,
-        10, 1, 1, 1,
-        0, 0, 0, 0
+        10, 1, 6, 1, 1,
+        10, 1, 4, 1, 1,
+        10, 1, 1, 1, 1,
+        0, 0, 0, 0, 0
     )
     let scattered: Requirements =
         requirements_of(
-        10, 1, 4, 1,
-        20, 1, 1, 1,
-        10, 1, 6, 1,
-        10, 1, 1, 1
+        10, 1, 4, 1, 1,
+        20, 1, 1, 1, 1,
+        10, 1, 6, 1, 1,
+        10, 1, 1, 1, 1
     )
     let a: Resolution = resolve(ascending, demo_registry(), 10)
     let b: Resolution = resolve(descending, demo_registry(), 10)
@@ -95,17 +95,17 @@ fn test_the_answer_does_not_depend_on_order() -> Int {
 fn test_adding_a_dependency_does_not_move_another() -> Int {
     let before: Requirements =
         requirements_of(
-        10, 1, 2, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let after: Requirements =
         requirements_of(
-        10, 1, 2, 1,
-        20, 1, 3, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        20, 1, 3, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let a: Resolution = resolve(before, demo_registry(), 10)
     let b: Resolution = resolve(after, demo_registry(), 10)
@@ -122,10 +122,10 @@ fn test_adding_a_dependency_does_not_move_another() -> Int {
 # version does not arrive until something asks for it.
 fn test_a_newer_published_version_is_not_selected_by_itself() -> Int {
     let reqs: Requirements = requirements_of(
-        10, 1, 2, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let result: Resolution = resolve(reqs, demo_registry(), 10)
     let mut failures = 0
@@ -137,10 +137,10 @@ fn test_a_newer_published_version_is_not_selected_by_itself() -> Int {
 
 fn test_a_module_nobody_publishes_is_named() -> Int {
     let reqs: Requirements = requirements_of(
-        99, 1, 1, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        99, 1, 1, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let result: Resolution = resolve(reqs, demo_registry(), 99)
     let mut failures = 0
@@ -153,10 +153,10 @@ fn test_a_module_nobody_publishes_is_named() -> Int {
 # registry and does not know which requirement was too high.
 fn test_a_demand_above_the_registry_carries_the_demand() -> Int {
     let reqs: Requirements = requirements_of(
-        20, 1, 9, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        20, 1, 9, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let result: Resolution = resolve(reqs, demo_registry(), 20)
     let mut failures = 0
@@ -170,10 +170,10 @@ fn test_a_demand_above_the_registry_carries_the_demand() -> Int {
 # nobody requires must not reveal whether the registry has it.
 fn test_an_unrequired_module_is_answered_before_the_registry() -> Int {
     let reqs: Requirements = requirements_of(
-        10, 1, 1, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 1, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     # 20 is published but not required; 99 is neither. Both answer the same
     # way, so the answer carries no information about the registry.
@@ -194,17 +194,17 @@ fn test_an_unrequired_module_is_answered_before_the_registry() -> Int {
 fn test_the_highest_published_version_is_selectable() -> Int {
     let at_ceiling: Requirements =
         requirements_of(
-        10, 1, 7, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 7, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let over: Requirements =
         requirements_of(
-        10, 1, 8, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 8, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let a: Resolution = resolve(at_ceiling, demo_registry(), 10)
     let b: Resolution = resolve(over, demo_registry(), 10)
@@ -220,10 +220,10 @@ fn test_the_highest_published_version_is_selectable() -> Int {
 # including for values no manifest would emit.
 fn test_resolve_is_total() -> Int {
     let reqs: Requirements = requirements_of(
-        10, 1, 2, 1,
-        20, 1, 1, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        20, 1, 1, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
     let mut failures = 0
     failures = failures
@@ -242,20 +242,20 @@ fn test_resolve_is_total() -> Int {
 
 fn app_requirements() -> Requirements {
     return requirements_of(
-        10, 1, 2, 1,
-        20, 1, 1, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 2, 1, 1,
+        20, 1, 1, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
 }
 
 # What a dependency brings with it: it needs a newer 10 than the app asked for.
 fn dependency_requirements() -> Requirements {
     return requirements_of(
-        10, 1, 5, 1,
-        30, 1, 1, 1,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        10, 1, 5, 1, 1,
+        30, 1, 1, 1, 1,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
     )
 }
 
@@ -345,10 +345,10 @@ fn test_requirements_disagreeing_on_the_major_are_refused() -> Int {
         30, 1, 1, slot_live()
     )
     let mixed: Requirements = requirements_of(
-        10, 1, 2, slot_live(),
-        10, 2, 5, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        10, 1, 2, slot_live(), app(),
+        10, 2, 5, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
     let result: Resolution = resolve(mixed, registry, 10)
     let mut failures = 0
@@ -365,14 +365,194 @@ fn test_agreeing_majors_still_resolve() -> Int {
         30, 1, 1, slot_live()
     )
     let agreed: Requirements = requirements_of(
-        10, 1, 2, slot_live(),
-        10, 1, 5, slot_live(),
-        0, 0, 0, slot_empty(),
-        0, 0, 0, slot_empty()
+        10, 1, 2, slot_live(), app(),
+        10, 1, 5, slot_live(), app(),
+        0, 0, 0, slot_empty(), 0,
+        0, 0, 0, slot_empty(), 0
     )
     let result: Resolution = resolve(agreed, registry, 10)
     let mut failures = 0
     failures = failures + expect_eq_int(resolution_kind(result), outcome_selected())
     failures = failures + expect_eq_int(resolution_payload(result), 5)
+    return failures
+}
+
+# ------------------------------------------------------------------- why
+#
+# The claim these test is not "why returns something" — it is that the
+# explanation is the *same kind of object* as the selection: a function of the
+# requirement set, complete, and in agreement with the decision it explains.
+# A solver can produce a plausible explanation; only a maximum can produce one
+# that is checkable against the answer.
+
+fn test_why_names_the_bound_that_decided_the_answer() -> Int {
+    # The app wants v2, package 20 wants v5. MVS selects 5, and 5 is 20's.
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1, app(),
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let answer: Why = why(reqs, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.kind, why_because())
+    failures = failures + expect_eq_int(answer.version, 5)
+    failures = failures + expect_eq_int(answer.requirer, 20)
+    # One bound decided it, and one did not — the app's v2 is the `--all` row.
+    failures = failures + expect_eq_int(answer.agreeing, 1)
+    failures = failures + expect_eq_int(answer.others, 1)
+    return failures
+}
+
+# The explanation must not depend on slot order, for the same reason the
+# selection must not: a lock whose explanation moved with its input order
+# would be explaining the order rather than the rule.
+#
+# The two sets below *tie* at the maximum, with the larger requirer code
+# first. That is deliberate and it is the only arrangement that distinguishes
+# the two candidate rules: "the first slot at the maximum" answers 30 for one
+# ordering and 20 for the other, while "the smallest requirer at the maximum"
+# answers 20 for both. A tie where the smaller code happens to come first
+# would pass under either rule and would test nothing.
+fn test_why_does_not_depend_on_order() -> Int {
+    let one: Requirements = requirements_of(
+        10, 1, 5, 1, 30,
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let other: Requirements = requirements_of(
+        10, 1, 5, 1, 20,
+        10, 1, 5, 1, 30,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let a: Why = why(one, demo_registry(), 10)
+    let b: Why = why(other, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(a.version, b.version)
+    failures = failures + expect_eq_int(a.requirer, b.requirer)
+    failures = failures + expect_eq_int(a.agreeing, b.agreeing)
+    failures = failures + expect_eq_int(a.others, b.others)
+    return failures
+}
+
+# A tie is reported rather than hidden. Naming one of two equal bounds as
+# *the* reason would imply that removing it lowers the selection; it does not.
+fn test_a_tie_is_visible_in_the_explanation() -> Int {
+    # 30 is in the first slot and 20 in the second, so the answer 20 is the
+    # smallest requirer at the maximum rather than the first one found.
+    let reqs: Requirements = requirements_of(
+        10, 1, 5, 1, 30,
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let answer: Why = why(reqs, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.version, 5)
+    failures = failures + expect_eq_int(answer.agreeing, 2)
+    failures = failures + expect_eq_int(answer.others, 0)
+    # And the requirer named is a function of the set, not of the order: the
+    # smaller code among those at the maximum.
+    failures = failures + expect_eq_int(answer.requirer, 20)
+    return failures
+}
+
+# The counterfactual is what makes an explanation actionable: it names the
+# requirement to change. Remove the dependency and the app becomes the reason.
+fn test_removing_the_deciding_bound_changes_the_reason() -> Int {
+    let direct: Requirements = requirements_of(
+        10, 1, 2, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let inherited: Requirements = requirements_of(
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let with: Why = why_of(direct, inherited, demo_registry(), 10)
+    let without: Why = why_of(direct, no_requirements(), demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(with.requirer, 20)
+    failures = failures + expect_eq_int(with.version, 5)
+    failures = failures + expect_eq_int(without.requirer, app())
+    failures = failures + expect_eq_int(without.version, 2)
+    return failures
+}
+
+# An explanation must agree with the decision it explains. This is the one
+# failure that would be worse than no explanation at all.
+fn test_why_agrees_with_resolve() -> Int {
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1, app(),
+        10, 1, 5, 1, 20,
+        20, 1, 3, 1, app(),
+        0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    let selected: Resolution = resolve(reqs, demo_registry(), 10)
+    let explained: Why = why(reqs, demo_registry(), 10)
+    failures = failures
+        + expect_eq_int(resolution_payload(selected), explained.version)
+    failures = failures + expect_eq_int(explained.resolution, resolution_kind(selected))
+    let other: Resolution = resolve(reqs, demo_registry(), 20)
+    let other_why: Why = why(reqs, demo_registry(), 20)
+    failures = failures
+        + expect_eq_int(resolution_payload(other), other_why.version)
+    return failures
+}
+
+# Nothing to explain is said as such. A bound of zero would read as a real
+# answer, and "no one requires this" is a different fact from "version 0".
+fn test_an_unrequired_module_is_unexplained() -> Int {
+    let answer: Why = why(empty_requirements(), demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.kind, why_unrequired())
+    failures = failures + expect_eq_int(answer.resolution, outcome_unrequired())
+    failures = failures + expect_eq_int(answer.version, 0)
+    failures = failures + expect_eq_int(answer.requirer, 0)
+    return failures
+}
+
+# A refusal has a reason, but not a selection. The explanation names the
+# resolution it declines to explain rather than inventing a bound.
+fn test_a_refusal_is_named_not_explained_as_a_bound() -> Int {
+    let excessive: Requirements = requirements_of(
+        20, 1, 9, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let answer: Why = why(excessive, demo_registry(), 20)
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.kind, why_unresolved())
+    failures = failures
+        + expect_eq_int(answer.resolution, outcome_above_published())
+    failures = failures + expect_eq_int(answer.version, 0)
+    return failures
+}
+
+# Every bound is accounted for: the ones that decided the answer plus the ones
+# that did not are exactly the live requirements for that module. An
+# explanation that dropped a bound would understate what a change could move.
+fn test_the_explanation_accounts_for_every_bound() -> Int {
+    let reqs: Requirements = requirements_of(
+        10, 1, 2, 1, app(),
+        10, 1, 5, 1, 20,
+        10, 1, 5, 1, 30,
+        10, 1, 1, 1, 40
+    )
+    let answer: Why = why(reqs, demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.version, 5)
+    failures = failures + expect_eq_int(answer.agreeing, 2)
+    failures = failures + expect_eq_int(answer.others, 2)
+    failures = failures
+        + expect_eq_int(answer.agreeing + answer.others,
+            requirement_count(reqs, 10))
     return failures
 }

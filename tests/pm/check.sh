@@ -48,11 +48,9 @@ cat "$shell" >>"$seed"
     fail "the resolver did not build: $(cat "$WORK/build.err")"
 
 "$WORK/resolver" >"$WORK/backend.out"
-cmp "$expected" "$WORK/backend.out" ||
-    fail 'C11 backend output differs from the recorded resolutions'
 "$KOFUN" run "$seed" >"$WORK/reference.out" 2>"$WORK/run.err" ||
     fail "the resolver did not run on the reference executor: $(cat "$WORK/run.err")"
-cmp "$expected" "$WORK/reference.out" ||
+cmp "$WORK/backend.out" "$WORK/reference.out" ||
     fail 'reference executor and C11 backend disagree'
 
 # A resolution must not depend on anything outside the requirement set.
@@ -72,8 +70,13 @@ cmp "$WORK/backend.out" "$WORK/bare.out" ||
 # outcome kind, payload, and the registry's ceiling. Kind 1 Selected,
 # 2 Unpublished, 3 AboveHighest, 4 Unrequired.
 
+# Read from what the binary printed, not from the golden. Asserting against
+# the golden only proves the golden says what it says: a changed rule is then
+# caught by the `cmp` at the end as "output differs", which names nothing.
+# Reading the run is what lets a broken rule fail by the name of the rule —
+# which is what the header of this file claims the gate does.
 field() {
-    sed -n "$1,$2p" "$expected" | tr '\n' ' '
+    sed -n "$1,$2p" "$WORK/backend.out" | tr '\n' ' '
 }
 
 check() {
@@ -129,10 +132,93 @@ swapped=$(field 54 57 | awk '{print $3}')
 test "$with" = "$swapped" ||
     fail "swapping the requirement sets changed the selection, $with vs $swapped"
 
+# --- why: the selection explained as the maximum it is
+#
+# Seven integers per explanation: module, kind, the resolution being
+# explained, the version, who stated the deciding bound, how many stated
+# exactly it, and how many bounds did not decide the answer.
+# Kind 1 Because, 2 Unrequired, 3 Unresolved.
+
+check 'v5 because 20 required it, and the app'"'"'s v2 decided nothing' \
+    58 64 '10 1 1 5 20 1 1 '
+# The explanation must be a function of the requirement set, exactly as the
+# selection is. Naming "the first slot at the maximum" would answer
+# differently here, and a lock whose explanation moved with its input order
+# would be explaining the order rather than the rule.
+check 'the same explanation from the same set in another order' \
+    65 71 '10 1 1 5 20 1 1 '
+check 'a bound nobody competes with is explained by its only author' \
+    72 78 '10 1 1 7 1 1 0 '
+
+# A tie, and the arrangement that makes the two candidate rules disagree: the
+# larger requirer code sits in the earlier slot. "The first slot at the
+# maximum" would answer 30 here and 20 below; the smallest requirer answers 20
+# for both. Without this pair the order-independence claim is untested, because
+# every other tie in this golden has the smaller code first and passes under
+# either rule.
+check 'a tie names the smallest requirer, not the first slot' \
+    79 85 '10 1 1 5 20 2 0 '
+check 'and the same tie in the other order names the same one' \
+    86 92 '10 1 1 5 20 2 0 '
+tied=$(field 79 85)
+tied_reordered=$(field 86 92)
+test "$tied" = "$tied_reordered" ||
+    fail "reordering a tie changed its explanation:
+  one order:   $tied
+  the other:   $tied_reordered
+  the selection is a function of the set; the explanation must be too"
+
+check 'across the closure, the dependency is the reason' \
+    93 99 '10 1 1 5 20 1 1 '
+# The counterfactual, recorded rather than argued: remove the dependency and
+# the app's own bound becomes the reason. This is what makes the explanation
+# actionable — it names the requirement to change.
+check 'with the dependency gone, the app is the reason' \
+    100 106 '10 1 1 2 1 1 0 '
+check 'a module only the dependency requires does not name the app' \
+    107 113 '30 1 1 1 20 1 0 '
+# Nothing to explain, said as such. A bound of zero would read as a real
+# answer, and "no one requires this" is a different fact from "version 0".
+check 'an unrequired module is unexplained, not explained as zero' \
+    114 120 '99 2 4 0 0 0 0 '
+# A refusal has a reason but not a selection. The explanation names the
+# resolution it is declining to explain rather than inventing a bound.
+check 'a refusal names its resolution and invents no bound' \
+    121 127 '20 3 3 0 0 0 0 '
+
+# The explanation must agree with the decision. An explanation that drifted
+# from the resolution it explains would be worse than none: it would be a
+# confident wrong answer to the question a lock diff asks.
+for pair in '6:58' '34:72' '42:93' '38:100' '50:107'; do
+    decision=$(field "${pair%%:*}" "$((${pair%%:*} + 3))" | awk '{print $3}')
+    explained=$(field "${pair##*:}" "$((${pair##*:} + 6))" | awk '{print $4}')
+    test "$decision" = "$explained" ||
+        fail "why explained v$explained for a resolution that selected v$decision"
+done
+
+# Every explanation that names a requirer must have a bound agreeing with it,
+# and the bounds must add up: the ones that decided the answer plus the ones
+# that did not are every live requirement for that module. An explanation that
+# dropped a bound would understate what a change could move.
+for start in 58 65 72 79 86 93 100 107; do
+    row=$(field "$start" "$((start + 6))")
+    agreeing=$(printf '%s' "$row" | awk '{print $6}')
+    requirer=$(printf '%s' "$row" | awk '{print $5}')
+    test "$agreeing" -ge 1 ||
+        fail "the explanation at line $start names requirer $requirer but no bound agrees with it"
+    test "$requirer" -ne 0 ||
+        fail "the explanation at line $start claims a reason but names no requirer"
+done
+
 # Order-independence over the flat set, likewise read rather than trusted.
-lines=$(wc -l <"$expected" | tr -d ' ')
-test "$lines" -eq 57 ||
-    fail "recorded decisions cover the whole golden: expected 57 lines, got $lines"
+lines=$(wc -l <"$WORK/backend.out" | tr -d ' ')
+test "$lines" -eq 127 ||
+    fail "recorded decisions cover the whole run: expected 127 lines, got $lines"
+
+# Every named decision passed, so a difference here is a line no assertion
+# owns. Checked last, and against the run rather than the other way round.
+cmp "$expected" "$WORK/backend.out" ||
+    fail 'named decisions passed but the recorded golden still differs'
 
 # Order-independence, read from the golden rather than trusted: the two
 # reordered queries must equal the two original ones, byte for byte.
@@ -271,4 +357,6 @@ printf 'pm: the core resolves without printing or reaching for the world: PASS\n
 printf 'pm: minimal version selection, every closed outcome read by name: PASS\n'
 printf 'pm: the same requirement set in any order gives the same lock: PASS\n'
 printf 'pm: a transitive bound only ever rises, so one pass is the whole answer: PASS\n'
+printf 'pm: a selection is explained by the bound that decided it, and the explanation agrees: PASS\n'
+printf 'pm: the explanation is order-independent, as the selection is: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'
