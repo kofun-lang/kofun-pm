@@ -7,7 +7,7 @@ honest boundary statement. Every lane names what it is blocked on.
 |---|---|---|
 | P1 resolution | MVS core, transitive requirements, the major-version boundary decision, `why`, and workspace members — **complete** | — |
 | P2 manifest & lock | dependency surface, lock format v1 pinning the resolution, re-lock idempotence and the three refusals — **landed**; artifacts wait on P4, which is what there is to pin | the language's `kofun.packages.lock` already pins by sha256 — this extends it |
-| P3 store | content-addressed layout; links rather than copies; `kpm verify` as a gate over the store's own integrity | — |
+| P3 store | content-addressed layout, links with a copy fallback, and `verify` as a gate — **landed**; "every lock entry is present" waits on P4, which is what puts entries there | — |
 | P4 fetch | source identity (URL, the Go move) vs a registry; integrity on arrival; offline as the default rather than a flag | the identity decision, which is its own ADR |
 | P5 cli | `kpm add/lock/verify/tree/why`; the explanation itself is **landed** in `seed/resolver/`, so P5 binds a command to it rather than deciding what it should say | P1, P2 |
 | P6 publishing | who may publish a name; signing; immutability of a published version | P4's identity decision |
