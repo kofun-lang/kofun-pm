@@ -1,0 +1,9 @@
+# format: kofun-pm.lock/v1
+# columns: module selection value
+# tool: b00b438
+# requirements: a0fd5e8839934691c1ee332514c312170ff19316231f3d744a6f3cf1004bd80a
+10	selected	6
+20	workspace	-
+30	selected	1
+40	workspace	-
+# digest: 958c9a4ec909aab5942ddcef6a7b31ca3328a2675d5c4d9e106dff5cc02bd107
