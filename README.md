@@ -37,7 +37,7 @@ option *names*, so a surface cannot be declared even around placeholder
 actions. That is issue #7. This repository does not ship a CLI whose commands
 do nothing.
 
-## Six decisions, each with what it costs
+## Seven decisions, each with what it costs
 
 A package is identified by **where it lives** — a URL, as in Go. There is no
 registry and none is planned; the question "who owns this name" has the same
@@ -81,10 +81,28 @@ published. That is a cost only if you wanted the drift.
 **What it buys, beyond reproducibility:** the selection is explainable, and the
 explanation is checkable against the answer.
 
+These are lines 170 and 171 of `seed/resolver/resolver.stdout`, written by the
+resolver rather than composed for this page:
+
 ```
-why 10  →  v5, because 20 requires >= 5
-           1 bound agreed; 1 other bound did not decide the answer
+why 10: v5, because 20 requires >= 5
+  1 bound agreed; 1 other bound did not decide the answer
 ```
+
+That distinction is newer than it looks. The wording used to be assembled by
+the gate, in `awk`, out of the seven integers a `Why` was printed as — because
+the language's executable slice took `Int` in and gave `Int` out. A gate cannot
+check a sentence it wrote itself, so the one output a user actually reads was
+the one thing here that nothing pinned. `Text` results and `to_text(Int)` are
+in the slice now, so `render_why` is an ordinary function of a `Why`, the unit
+suite asserts it byte for byte, and the gate reads it. Both recordings are kept
+and held against each other: a sentence that drifted from the fields it renders
+would be a confident wrong answer to the question a lock diff asks.
+
+The gain is not only tidiness. Two refusals used to share one integer — kind 3
+covered both "nobody publishes it" and "you asked above everything published",
+which send a reader to two different fixes. Words tell them apart; a kind
+cannot.
 
 A solver's answer to "why this version?" is a history — these constraints were
 tried, this one was relaxed, this assignment survived — so explaining it means
@@ -124,7 +142,7 @@ first, publishing a package could quietly take over a name the workspace owns.
 The gate checks a member that *is* published (and must not resolve to v3) and
 one that is published nowhere (and must not be `Unpublished`).
 
-### 3. One copy on disk, addressed by content
+### 4. One copy on disk, addressed by content
 
 pnpm's insight: a package version is immutable, so its bytes are its name.
 Every artifact lands in a store under its `sha256`, and a project's dependency
@@ -138,7 +156,7 @@ promised" a question you can answer without a network.
 `kpm verify` is that check, and it is a gate rather than a subcommand nobody
 runs.
 
-### 4. A build output is named by its complete inputs
+### 5. A build output is named by its complete inputs
 
 Go stops at fetch reproducibility: `go.sum` pins the bytes that arrived, and
 what happens next is the build system's business. Nix goes further — a build
@@ -168,7 +186,7 @@ identical. Nix has the same issue; the successor is content-addressed
 derivations, which is a later and harder decision, named in
 [ADR 4](docs/adr/0004-input-addressed-derivations.md) rather than ignored.
 
-### 5. Everything is pinned by digest, including the resolution
+### 6. Everything is pinned by digest, including the resolution
 
 `go.sum` pins artifacts. The lock here pins the artifacts *and* the resolution
 that produced them, so re-resolving from the same manifest is a check rather
@@ -177,7 +195,7 @@ by doing it twice.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
-### 6. No install scripts. Ever.
+### 7. No install scripts. Ever.
 
 This is the one that is not a trade-off.
 
@@ -204,7 +222,8 @@ a hostile `TZ`, locale, and `env -i`:
 
 - `seed/resolver/` — minimal version selection over semver, with
   order-independence, transitive monotonicity, and the major-mismatch refusal
-  read out of the recorded output rather than asserted;
+  read out of the recorded output rather than asserted; and `why`'s
+  explanation now written in Kofun rather than assembled by the gate;
 - `seed/derivation/` — input-addressed identity, with the three properties a
   safe binary cache rests on.
 
@@ -212,10 +231,16 @@ It is the algorithm, not the plumbing — the store, the fetcher, and the CLI
 are the lanes in [docs/ROADMAP.md](docs/ROADMAP.md), each saying what it is
 blocked on. Nothing here claims a network is implemented.
 
+The tooling around the seeds is still shell, and that is a boundary the
+language sets rather than a preference: each piece moves into Kofun as the
+slice widens, and the explanation is the first piece to have moved. The gate
+checks the property rather than the implementation, so a move does not change
+what the gate claims — only who is making the claim.
+
 ```sh
 git clone --recurse-submodules https://github.com/kofun-lang/kofun-pm
 cd kofun-pm
-sh scripts/dev.sh          # 21 unit tests across two seeds, and the gate
+sh scripts/dev.sh          # 52 unit tests across two seeds, and the gate
 ```
 
 ## Learning from, and the line drawn

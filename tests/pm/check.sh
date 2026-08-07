@@ -134,21 +134,40 @@ test "$with" = "$swapped" ||
 
 # --- why: the selection explained as the maximum it is
 #
-# Seven integers per explanation: module, kind, the resolution being
-# explained, the version, who stated the deciding bound, how many stated
-# exactly it, and how many bounds did not decide the answer.
-# Kind 1 Because, 2 Unrequired, 3 Unresolved.
+# Two recordings of one answer. The seven integers per explanation — module,
+# kind, the resolution being explained, the version, who stated the deciding
+# bound, how many stated exactly it, and how many did not decide — and then,
+# from line 170, the sentence the resolver writes for a person.
+#
+# The sentence is read where a sentence is the claim, and the integers are
+# read where they carry something the words deliberately leave out. Until the
+# language could return `Text` the wording was assembled here, in `awk`, from
+# those integers: this gate wrote the sentence and then had nothing to check
+# it against, so the one output a user actually reads was pinned nowhere.
+# `seed/resolver/core.kofun` writes it now, and this reads it.
 
-check 'v5 because 20 required it, and the app'"'"'s v2 decided nothing' \
-    58 64 '10 1 1 5 20 1 1 '
+says() {
+    label=$1; at=$2; want=$3
+    got=$(sed -n "${at}p" "$WORK/backend.out")
+    test "$got" = "$want" || fail "$label:
+  expected: $want
+  got:      $got"
+}
+
+says 'v5 because 20 required it, and the app'"'"'s v2 decided nothing' \
+    170 'why 10: v5, because 20 requires >= 5'
+says 'and the bound that decided nothing is still accounted for' \
+    171 '  1 bound agreed; 1 other bound did not decide the answer'
 # The explanation must be a function of the requirement set, exactly as the
 # selection is. Naming "the first slot at the maximum" would answer
 # differently here, and a lock whose explanation moved with its input order
 # would be explaining the order rather than the rule.
-check 'the same explanation from the same set in another order' \
-    65 71 '10 1 1 5 20 1 1 '
-check 'a bound nobody competes with is explained by its only author' \
-    72 78 '10 1 1 7 1 1 0 '
+says 'the same explanation from the same set in another order' \
+    172 'why 10: v5, because 20 requires >= 5'
+# The root package is named rather than numbered. It is the requirer an
+# explanation names most often, and `1` is an internal code.
+says 'a bound nobody competes with is explained by its only author' \
+    174 'why 10: v7, because the root package requires >= 7'
 
 # A tie, and the arrangement that makes the two candidate rules disagree: the
 # larger requirer code sits in the earlier slot. "The first slot at the
@@ -156,35 +175,85 @@ check 'a bound nobody competes with is explained by its only author' \
 # for both. Without this pair the order-independence claim is untested, because
 # every other tie in this golden has the smaller code first and passes under
 # either rule.
-check 'a tie names the smallest requirer, not the first slot' \
-    79 85 '10 1 1 5 20 2 0 '
-check 'and the same tie in the other order names the same one' \
-    86 92 '10 1 1 5 20 2 0 '
-tied=$(field 79 85)
-tied_reordered=$(field 86 92)
+says 'a tie names the smallest requirer, not the first slot' \
+    176 'why 10: v5, because 20 requires >= 5'
+# And a tie is said to be one. An explanation naming a single requirer would
+# imply that removing it lowers the selection, which is false here.
+says 'a tie is reported as a tie, in the plural' \
+    177 '  2 bounds agreed; 0 other bounds did not decide the answer'
+tied=$(sed -n '176,177p' "$WORK/backend.out")
+tied_reordered=$(sed -n '178,179p' "$WORK/backend.out")
 test "$tied" = "$tied_reordered" ||
     fail "reordering a tie changed its explanation:
   one order:   $tied
   the other:   $tied_reordered
   the selection is a function of the set; the explanation must be too"
 
-check 'across the closure, the dependency is the reason' \
-    93 99 '10 1 1 5 20 1 1 '
+says 'across the closure, the dependency is the reason' \
+    180 'why 10: v5, because 20 requires >= 5'
 # The counterfactual, recorded rather than argued: remove the dependency and
 # the app's own bound becomes the reason. This is what makes the explanation
 # actionable — it names the requirement to change.
-check 'with the dependency gone, the app is the reason' \
-    100 106 '10 1 1 2 1 1 0 '
-check 'a module only the dependency requires does not name the app' \
-    107 113 '30 1 1 1 20 1 0 '
+says 'with the dependency gone, the app is the reason' \
+    182 'why 10: v2, because the root package requires >= 2'
+says 'a module only the dependency requires does not name the app' \
+    184 'why 30: v1, because 20 requires >= 1'
 # Nothing to explain, said as such. A bound of zero would read as a real
 # answer, and "no one requires this" is a different fact from "version 0".
-check 'an unrequired module is unexplained, not explained as zero' \
+says 'an unrequired module is unexplained, not explained as zero' \
+    186 'why 99: nothing requires it, so there is nothing to explain'
+says 'and it says there is no bound rather than reporting none' \
+    187 '  no requirement names it, so there is no bound to list'
+
+# The two refusals. As integers both are kind 3 and the output could not tell
+# them apart; a reader could not either, and they send someone to two
+# different fixes — publish it, or lower the demand. This pair is the clearest
+# thing the move to `Text` bought, so it is checked as a pair.
+says 'a demand above the ceiling says which ceiling' \
+    188 'why 20: required above everything published, so there is nothing to explain'
+says 'a module published nowhere says that instead' \
+    203 'why 99: nobody publishes it, so there is nothing to explain'
+above=$(sed -n '188p' "$WORK/backend.out")
+nowhere=$(sed -n '203p' "$WORK/backend.out")
+test "$above" != "$nowhere" ||
+    fail "two different refusals produced one sentence:
+  $above
+  both are kind 3 in the fields; the words are what tells them apart"
+
+# A member, and both halves of the rule that pulls in two directions.
+says 'a member is explained as local, and as nothing to fetch' \
+    192 'why 20: a workspace member, so there is nothing to fetch'
+says 'and its requirements are still said to join the set' \
+    193 '  a member has no version to select, and its own requirements still join the set'
+says 'the member is named as the reason its bound decided the answer' \
+    190 'why 10: v6, because 40 requires >= 6'
+
+# What the sentence deliberately does not say, read from the fields instead.
+# `resolution` is the outcome being explained — 4 Unrequired, 3 AboveHighest —
+# and `version` is 0 rather than a bound. The wording carries neither on
+# purpose: a reader does not need the outcome's number, and a machine should
+# not be parsing prose for it.
+check 'an unrequired explanation carries its outcome and invents no bound' \
     114 120 '99 2 4 0 0 0 0 '
-# A refusal has a reason but not a selection. The explanation names the
-# resolution it is declining to explain rather than inventing a bound.
 check 'a refusal names its resolution and invents no bound' \
     121 127 '20 3 3 0 0 0 0 '
+
+# The two recordings must not be able to disagree. They are made from one
+# `Why` in one run, so a difference here is a rendering that drifted from the
+# answer it renders — which would be worse than no explanation, because it
+# would be a confident wrong one.
+for pair in '58:170' '65:172' '72:174' '79:176' '86:178' '93:180' \
+    '100:182' '107:184' '149:190'
+do
+    version=$(field "${pair%%:*}" "$((${pair%%:*} + 6))" | awk '{print $4}')
+    sentence=$(sed -n "${pair##*:}p" "$WORK/backend.out")
+    case "$sentence" in
+        *"v$version, because "*) ;;
+        *) fail "the sentence and the fields disagree:
+  the fields say v$version
+  the sentence says: $sentence" ;;
+    esac
+done
 
 # The explanation must agree with the decision. An explanation that drifted
 # from the resolution it explains would be worse than none: it would be a
@@ -276,8 +345,8 @@ for start in 156 163; do
 done
 
 lines=$(wc -l <"$WORK/backend.out" | tr -d ' ')
-test "$lines" -eq 169 ||
-    fail "recorded decisions cover the whole run: expected 169 lines, got $lines"
+test "$lines" -eq 204 ||
+    fail "recorded decisions cover the whole run: expected 204 lines, got $lines"
 
 # Every named decision passed, so a difference here is a line no assertion
 # owns. Checked last, and against the run rather than the other way round.
