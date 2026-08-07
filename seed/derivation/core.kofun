@@ -11,9 +11,13 @@
 # This file is the *structure* of that identity, not its cryptography. The
 # real mixing function is sha256; here it is a modular polynomial fold, which
 # is enough to prove the three properties that make input-addressing work and
-# is honest about being a projection. contracts/derivation.kofun holds the
-# canonical surface with Bytes digests, pinned by the gate at the compiler
-# boundary.
+# is honest about being a projection. There is no canonical surface beside it:
+# `contracts/` holds the CLI and manifest surfaces alone, so this file is the
+# only statement of the identity, which is why the gate reads every property it
+# claims rather than pinning it against a richer declaration. Replacing the fold
+# with sha256 waits on `Bytes` in the executable slice, and
+# [ADR 6](../../docs/adr/0006-content-addressed-derivations-deferred.md) makes
+# that a precondition for anything keyed on this digest.
 #
 # The three properties, each proven by the gate rather than asserted:
 #
