@@ -644,4 +644,116 @@ printf 'pm: a dependency is an identity and a lower bound, and the absences are 
 printf 'pm: the lock pins the resolution, and re-locking is idempotent: PASS\n'
 printf 'pm: edited, stale, and drifted locks are three refusals, not one: PASS\n'
 printf 'pm: a workspace member is locked as a member, never as a version: PASS\n'
+
+# ============================================================= the store
+#
+# A store keyed by digest makes "is this the artifact the lock promised" a
+# question answerable without a network. It is also global state — one
+# directory shared by every project on a machine — which is why `verify` runs
+# here rather than waiting to be typed. A store whose integrity is only
+# checked on request is a store whose integrity is unknown.
+
+store_tool="$ROOT/scripts/store.sh"
+test -x "$store_tool" || fail 'the store tool is missing'
+
+STORE="$WORK/store"
+export KPM_STORE="$STORE"
+mkdir -p "$WORK/src"
+printf 'package alpha\n' >"$WORK/src/a"
+printf 'package beta\n' >"$WORK/src/b"
+# The same bytes under a different name. Nothing about the name may reach the
+# store, so this must not become a second entry.
+printf 'package alpha\n' >"$WORK/src/a-renamed"
+
+digest_a=$(sh "$store_tool" add "$WORK/src/a") ||
+    fail 'the store could not accept a file'
+digest_b=$(sh "$store_tool" add "$WORK/src/b")
+digest_again=$(sh "$store_tool" add "$WORK/src/a-renamed")
+
+test "$digest_a" = "$digest_again" ||
+    fail "the same bytes under another name produced a different digest:
+  $digest_a and $digest_again"
+stored=$(find "$STORE" -type f | wc -l | tr -d ' ')
+test "$stored" -eq 2 ||
+    fail "three adds of two distinct contents produced $stored entries; the store is keyed by something other than content"
+
+# The path is the digest and nothing else. A name or a version in it would make
+# the same bytes two entries and would make the store's integrity depend on
+# metadata the bytes do not carry.
+entry_a=$(sh "$store_tool" path "$digest_a")
+test "$(printf '%s' "${entry_a#"$STORE"/}" | tr -d '/')" = "$digest_a" ||
+    fail "the store path carries something other than the digest: $entry_a"
+
+sh "$store_tool" verify >"$WORK/store.verify" 2>&1 ||
+    fail "a freshly filled store did not verify: $(cat "$WORK/store.verify")"
+
+# Links rather than copies: the same inode, so ten projects sharing a
+# dependency store ten copies of nothing.
+sh "$store_tool" link "$digest_a" "$WORK/proj/a" >"$WORK/store.link" 2>&1 ||
+    fail "the store could not link an entry: $(cat "$WORK/store.link")"
+grep -q '^store: linked ' "$WORK/store.link" ||
+    fail "linking fell back to a copy on a filesystem that supports links:
+$(cat "$WORK/store.link")"
+links=$(( $(stat -c %h "$entry_a" 2>/dev/null || stat -f %l "$entry_a") ))
+test "$links" -ge 2 ||
+    fail "the entry has $links link(s) after linking; the bytes were copied, not shared"
+
+# And the fallback, forced. A fallback that is never exercised is a fallback
+# nobody knows is broken — this is the path taken across filesystems and on
+# filesystems without hard links at all.
+KPM_NO_HARDLINK=1 sh "$store_tool" link "$digest_b" "$WORK/proj/b" \
+    >"$WORK/store.copy" 2>&1 ||
+    fail "the copy fallback failed: $(cat "$WORK/store.copy")"
+grep -q 'the filesystem refused a link' "$WORK/store.copy" ||
+    fail 'the forced fallback did not take the copy path'
+cmp "$WORK/src/b" "$WORK/proj/b" ||
+    fail 'the copied dependency does not match the entry it came from'
+test ! -w "$WORK/proj/b" ||
+    fail 'a copied dependency is writable; a project that edits it in place makes its lock a description of something else'
+
+# --- the three ways a store goes wrong, each named
+
+expect_store_refusal() {
+    label=$1; needle=$2
+    if sh "$store_tool" verify >"$WORK/store.bad" 2>&1; then
+        fail "$label: the store verified when it should not have"
+    fi
+    grep -Fq -- "$needle" "$WORK/store.bad" ||
+        fail "$label: refused, but not by name:
+$(sed 's/^/    /' "$WORK/store.bad")"
+}
+
+# Corruption names the entry, what it should be, and what it is. "The store is
+# corrupt" tells an operator to delete all of it; this tells them which
+# artifact to fetch again.
+chmod 644 "$entry_a"
+printf 'tampered\n' >"$entry_a"
+chmod 444 "$entry_a"
+expect_store_refusal 'a corrupted entry was not named' 'store: CORRUPT'
+grep -Fq "  expected $digest_a" "$WORK/store.bad" ||
+    fail 'the corruption report does not say what the entry should have been'
+grep -qE '^  actual   [0-9a-f]{64}$' "$WORK/store.bad" ||
+    fail 'the corruption report does not say what the entry actually is'
+
+# Restore, and then the condition *under which* corruption becomes possible
+# without anyone doing anything wrong. A hard link shares the inode, so a
+# writable entry is one any project can edit for every other project.
+chmod 644 "$entry_a"
+cp "$WORK/src/a" "$entry_a"
+expect_store_refusal 'a writable entry was not flagged' 'store: WRITABLE'
+chmod 444 "$entry_a"
+
+# An interrupted write is not corruption of an entry — nothing claims it — but
+# a store that quietly accumulates half-written files is one nobody is
+# watching.
+touch "$STORE/$(printf '%s' "$digest_b" | cut -c1-2)/leftover.incoming.1"
+expect_store_refusal 'an interrupted write was not reported' 'interrupted write'
+rm -f "$STORE"/*/leftover.incoming.1
+
+sh "$store_tool" verify >"$WORK/store.final" 2>&1 ||
+    fail "the store did not verify after the damage was undone: $(cat "$WORK/store.final")"
+
+printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
+printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'
+printf 'pm: corruption names the entry, the expected digest, and the actual one: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'
