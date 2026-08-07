@@ -1,0 +1,65 @@
+# The dependency surface of `kofun.toml`, declared.
+#
+# This file is the manifest side of the lock, in the same spirit as
+# `contracts/kpm-cli.kofun`: a surface written down before anything reads it,
+# so that what the resolver consumes is a decision on the page rather than
+# whatever a parser happens to accept first. Nothing parses it yet — that
+# arrives with the CLI binding, issue #7 — and the gate pins its shape so it
+# cannot quietly grow fields the resolver has no use for.
+#
+# It lives here rather than at the repository root because a root `kofun.toml`
+# makes the language hand the build to its own build system, and this
+# repository is not a package.
+#
+# ---------------------------------------------------------------------------
+#
+# A dependency is an identity and a lower bound. That is the whole of it, and
+# the shortness is the design rather than an unfinished sketch.
+#
+# The identity is a URL, and it already carries the major version — a package
+# at major 2 lives somewhere else than the same code at major 1
+# ([ADR 3](../docs/adr/0003-url-identity.md),
+# [ADR 5](../docs/adr/0005-semver-with-the-major-in-the-identity.md)). So the
+# manifest never names a major separately: there is no field for it because
+# there is nothing to say that the key does not already say.
+#
+# The value is a minimum, and only ever a minimum. Under minimal version
+# selection a requirement is a lower bound; two of them for one module are not
+# a conflict but two bounds, and the larger satisfies both
+# ([ADR 1](../docs/adr/0001-minimal-version-selection.md)).
+
+[dependencies]
+"https://example.org/http" = ">= 1.4.0"
+"https://example.org/json/v2" = ">= 2.1.0"
+
+# A workspace member is declared, not required. Its requirements join the set
+# and it is never fetched, so it carries no version — recording one would
+# invite the lock to pin a local path, which is a lock that is wrong on every
+# other machine.
+[workspace]
+members = ["./tools/codegen"]
+
+# ---------------------------------------------------------------------------
+# What is deliberately absent, and why each one is a decision
+#
+#   An upper bound (`^1.2`, `~1.2`, `< 2`). MVS has no conflict case because
+#   every requirement is a lower bound; an upper bound reintroduces one, and
+#   with it the solver ADR 1 declined. The major boundary — the thing a caret
+#   is usually protecting — is in the identity instead.
+#
+#   `features` / `optional`. A conditional dependency makes the resolution a
+#   function of the feature set as well as the requirement set, so "the same
+#   manifest gives the same lock" would need qualifying. If a package has two
+#   modes it can be two packages.
+#
+#   `git` / `branch` / `rev`. A branch is not a version and moves under you.
+#   The identity is where the package lives and the version is what it
+#   published; a revision pin is the store's job, by digest, not the
+#   manifest's.
+#
+#   A registry or index name. There is no registry
+#   ([ADR 3](../docs/adr/0003-url-identity.md)), so there is nothing to name.
+#
+# `tests/pm/check.sh` asserts these absences rather than trusting this comment,
+# because a list of things a file does not contain is exactly the kind of claim
+# that rots.

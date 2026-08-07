@@ -345,8 +345,8 @@ for start in 156 163; do
 done
 
 lines=$(wc -l <"$WORK/backend.out" | tr -d ' ')
-test "$lines" -eq 204 ||
-    fail "recorded decisions cover the whole run: expected 204 lines, got $lines"
+test "$lines" -eq 218 ||
+    fail "recorded decisions cover the whole run: expected 218 lines, got $lines"
 
 # Every named decision passed, so a difference here is a line no assertion
 # owns. Checked last, and against the run rather than the other way round.
@@ -493,4 +493,155 @@ printf 'pm: a transitive bound only ever rises, so one pass is the whole answer:
 printf 'pm: a selection is explained by the bound that decided it, and the explanation agrees: PASS\n'
 printf 'pm: the explanation is order-independent, as the selection is: PASS\n'
 printf 'pm: a member joins the requirement set and is never fetched: PASS\n'
+
+# ============================================================== the lock
+#
+# `go.sum` pins artifacts. This pins the resolution as well, and that is only
+# worth doing because MVS is a function: re-resolving the same requirements
+# must give the same answer, so verifying is a check rather than a hope.
+#
+# Three failures, and the whole value is that they are three rather than one.
+# "The lock is wrong" sends a reader nowhere; "you edited it", "it is stale"
+# and "the tool changed its answer" each say what to do next.
+
+lock_tool="$ROOT/scripts/lock.sh"
+test -x "$lock_tool" || fail 'the lock tool is missing'
+committed_lock="$ROOT/kofun.lock"
+test -f "$committed_lock" || fail 'the committed lock is missing'
+
+# Idempotence. Same requirements, byte-identical lock, run twice — the claim
+# the language's own `kofun.packages.lock` makes and this extends.
+sh "$lock_tool" write "$WORK/first.lock" >"$WORK/lock.write1" 2>&1 ||
+    fail "the lock could not be written: $(cat "$WORK/lock.write1")"
+sh "$lock_tool" write "$WORK/second.lock" >"$WORK/lock.write2" 2>&1 ||
+    fail "the lock could not be written a second time: $(cat "$WORK/lock.write2")"
+cmp "$WORK/first.lock" "$WORK/second.lock" ||
+    fail "re-locking the same requirements produced a different lock:
+$(diff "$WORK/first.lock" "$WORK/second.lock" | sed 's/^/    /')"
+
+sh "$lock_tool" verify "$WORK/first.lock" >"$WORK/lock.verify" 2>&1 ||
+    fail "a freshly written lock did not verify: $(cat "$WORK/lock.verify")"
+
+# The committed lock still describes the scenario in the tree. This is the
+# check that makes the lock a discipline rather than a file: change the
+# requirements without re-locking and the gate says so.
+sh "$lock_tool" verify "$committed_lock" >"$WORK/lock.committed" 2>&1 ||
+    fail "the committed lock no longer matches the tree:
+$(sed 's/^/    /' "$WORK/lock.committed")
+  re-lock with: sh scripts/lock.sh write"
+
+# A member is recorded as a member and carries no version. A lock that pinned
+# one would be pinning a local path, which is wrong on every other machine —
+# the reason Member is an outcome rather than a Selected with a version.
+grep -qE '^20	workspace	-$' "$committed_lock" ||
+    fail 'the lock does not record module 20 as a workspace member without a version'
+if grep -E '^[0-9]+	workspace	' "$committed_lock" | grep -qvE '	-$'; then
+    fail 'a workspace member was locked with a version; a lock must not pin a local path'
+fi
+
+# --- the three refusals, each by name
+
+re_sign() {
+    # Rebuild a lock's digest over its edited contents, so the result is
+    # internally consistent. Without this a stale lock is indistinguishable
+    # from an edited one, and the two want opposite responses.
+    grep -v '^# digest: ' "$1" >"$WORK/resign.covered"
+    cat "$WORK/resign.covered" >"$2"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '# digest: %s\n' \
+            "$(sha256sum <"$WORK/resign.covered" | cut -d' ' -f1)" >>"$2"
+    else
+        printf '# digest: %s\n' \
+            "$(shasum -a 256 <"$WORK/resign.covered" | cut -d' ' -f1)" >>"$2"
+    fi
+}
+
+expect_refusal() {
+    label=$1; file=$2; needle=$3
+    if sh "$lock_tool" verify "$file" >"$WORK/refusal.log" 2>&1; then
+        fail "$label: the lock verified when it should not have"
+    fi
+    grep -Fq -- "$needle" "$WORK/refusal.log" ||
+        fail "$label: refused, but not by name:
+$(sed 's/^/    /' "$WORK/refusal.log")"
+}
+
+# An edited row.
+sed 's/^10	selected	6$/10	selected	7/' "$committed_lock" >"$WORK/edited.lock"
+expect_refusal 'a hand-edited row was not refused' \
+    "$WORK/edited.lock" "the file has been edited by hand"
+
+# An edited *header*. The digest covers everything above it for this reason:
+# a digest over the rows alone would let someone move the requirement digest
+# and keep the selection, which is the edit worth making and the one nobody
+# would notice.
+sed 's/^# requirements: .*/# requirements: 0000000000000000/' "$committed_lock" \
+    >"$WORK/header.lock"
+expect_refusal 'a hand-edited header was not refused' \
+    "$WORK/header.lock" "the file has been edited by hand"
+
+# A stale lock: internally consistent, but written against other requirements.
+# It must be told apart from an edited one — re-locking is the answer to this
+# and is the wrong answer to the two above.
+sed 's/^# requirements: .*/# requirements: 1111111111111111111111111111111111111111111111111111111111111111/' \
+    "$committed_lock" >"$WORK/stale.pre"
+re_sign "$WORK/stale.pre" "$WORK/stale.lock"
+expect_refusal 'a stale lock was not refused' \
+    "$WORK/stale.lock" "written against a different requirement set"
+# …and specifically not as tampering, or the reader is sent to the wrong fix.
+sh "$lock_tool" verify "$WORK/stale.lock" >"$WORK/stale.log" 2>&1 || true
+if grep -Fq 'edited by hand' "$WORK/stale.log"; then
+    fail 'a stale lock was reported as a hand edit; the two want opposite responses'
+fi
+
+# --- the manifest surface
+#
+# The declared shape of a `[dependencies]` section: an identity and a lower
+# bound, and nothing else. The absences are the decisions, so they are asserted
+# rather than described — a list of things a file does not contain is exactly
+# the kind of claim that rots.
+
+manifest="$ROOT/contracts/manifest.toml"
+test -f "$manifest" || fail 'the manifest surface is missing'
+grep -q '^\[dependencies\]$' "$manifest" ||
+    fail 'the manifest surface no longer declares a [dependencies] section'
+
+# Read with comments stripped: the file spends most of its length explaining
+# what it refuses to carry, and a grep over the whole text cannot tell an
+# explanation from a declaration.
+sed 's/[[:space:]]*#.*$//' "$manifest" >"$WORK/manifest.decl"
+
+# Every dependency is a lower bound. An upper bound reintroduces the conflict
+# case MVS does not have, and with it the solver ADR 1 declined.
+if grep -qE '"\^|"~|<[[:space:]]*[0-9]|,[[:space:]]*<' "$WORK/manifest.decl"; then
+    fail 'the manifest declares an upper bound; every requirement under MVS is a lower bound'
+fi
+grep -qE '^"[^"]+"[[:space:]]*=[[:space:]]*">= ' "$WORK/manifest.decl" ||
+    fail 'no dependency is declared as a lower bound'
+
+# The major is in the identity, so there is no field for it.
+if grep -qE '^[[:space:]]*major[[:space:]]*=' "$WORK/manifest.decl"; then
+    fail 'the manifest names a major separately; the identity already carries it'
+fi
+
+# Each of these would make the resolution a function of something other than
+# the requirement set, which is the property the lock rests on.
+for absent in features optional 'git' branch rev registry index; do
+    if grep -qE "^[[:space:]]*$absent[[:space:]]*=" "$WORK/manifest.decl"; then
+        fail "the manifest grew a '$absent' field; the resolution would stop being a function of the requirement set alone"
+    fi
+done
+
+# A member is declared and never given a version, for the same reason the lock
+# refuses to pin one.
+grep -q '^\[workspace\]$' "$WORK/manifest.decl" ||
+    fail 'the manifest surface no longer declares a [workspace] section'
+if grep -E '^members[[:space:]]*=' "$WORK/manifest.decl" | grep -qE '>=|[0-9]+\.[0-9]+'; then
+    fail 'a workspace member carries a version; a member is declared, not required'
+fi
+
+printf 'pm: a dependency is an identity and a lower bound, and the absences are asserted: PASS\n'
+printf 'pm: the lock pins the resolution, and re-locking is idempotent: PASS\n'
+printf 'pm: edited, stale, and drifted locks are three refusals, not one: PASS\n'
+printf 'pm: a workspace member is locked as a member, never as a version: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'

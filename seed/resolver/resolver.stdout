@@ -202,3 +202,17 @@ why 40: a workspace member, so there is nothing to fetch
 0
 why 99: nobody publishes it, so there is nothing to explain
   nothing was selected, so no bound decided anything
+-- lock --
+10
+1
+6
+20
+6
+20
+30
+1
+1
+40
+6
+40
+-- end lock --

@@ -57,6 +57,27 @@ fn emit_why(
     return 0
 }
 
+# One lockable row: the module, what it resolved to, and the payload that
+# carries. Three integers, delimited by markers so `scripts/lock.sh` reads the
+# block by name rather than by a line offset that every assertion above would
+# then have to move with.
+fn emit_lock_row(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
+    module: Int
+) -> Int {
+    let result: Resolution = resolve_workspace(
+        direct, inherited, members, workspace, registry, module
+    )
+    print(module)
+    print(resolution_kind(result))
+    print(resolution_payload(result))
+    return 0
+}
+
 fn emit_workspace(
     registry: Registry,
     direct: Requirements,
@@ -405,6 +426,26 @@ fn main() -> Int {
     # everything published" send a reader to two different fixes.
     emit_why_flat(registry, reqs, 99)
     emit_rendered_why_flat(registry, reqs, 99)
+
+    # --- the lockable resolution
+    #
+    # What a lock would record: every module the closure names, and what it
+    # resolved to. Delimited, because a lock producer that read this by line
+    # offset would break every time a decision was added above it — and a
+    # producer that breaks on unrelated changes gets replaced by one that
+    # guesses. The sentences above are exactly the kind of addition that
+    # would have moved it.
+    #
+    # The members are here on purpose. A lock must record that 20 and 40 came
+    # from the workspace and must *not* pin a version for them: a lock that
+    # pinned a local path would be wrong on every other machine, which is the
+    # reason Member is an outcome rather than a Selected.
+    print("-- lock --")
+    emit_lock_row(registry, direct, inherited, member_reqs, workspace, 10)
+    emit_lock_row(registry, direct, inherited, member_reqs, workspace, 20)
+    emit_lock_row(registry, direct, inherited, member_reqs, workspace, 30)
+    emit_lock_row(registry, direct, inherited, member_reqs, workspace, 40)
+    print("-- end lock --")
 
     return 0
 }

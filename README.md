@@ -37,7 +37,7 @@ option *names*, so a surface cannot be declared even around placeholder
 actions. That is issue #7. This repository does not ship a CLI whose commands
 do nothing.
 
-## Seven decisions, each with what it costs
+## Eight decisions, each with what it costs
 
 A package is identified by **where it lives** — a URL, as in Go. There is no
 registry and none is planned; the question "who owns this name" has the same
@@ -186,7 +186,44 @@ identical. Nix has the same issue; the successor is content-addressed
 derivations, which is a later and harder decision, named in
 [ADR 4](docs/adr/0004-input-addressed-derivations.md) rather than ignored.
 
-### 6. Everything is pinned by digest, including the resolution
+### 6. The lock pins the resolution, not only the artifacts
+
+```
+# format: kofun-pm.lock/v1
+# columns: module selection value
+# tool: 3135b50
+# requirements: a0fd5e88…
+10	selected	6
+20	workspace	-
+# digest: 28cb369b…
+```
+
+`go.sum` pins the bytes that arrived. This also pins **what was resolved and
+what it was resolved from** — which is only worth doing because MVS is a
+function. Re-resolving the same requirements must give the same answer, so
+`kpm verify` is a check rather than a hope. A lock over a *search* cannot make
+that claim, which is why locks over searches pin outputs only.
+
+That buys three failures where other tools have one, and "the lock is wrong"
+sends a reader nowhere:
+
+| what happened | what the lock says | what to do |
+|---|---|---|
+| someone edited the file | its own digest no longer covers its contents | restore it |
+| the requirements changed | written against a different requirement set | re-lock |
+| same requirements, different answer | the tool changed its answer | file a bug |
+
+The third **cannot happen** while the rule is a maximum. It is checked anyway,
+because "cannot happen" is the state every silent corruption was in first.
+
+The digest covers the headers as well as the rows, deliberately: a digest over
+the rows alone would let someone move the requirements digest and keep the
+selection — the edit worth making, and the one nobody would notice.
+
+A workspace member is recorded as a member and carries no version. Pinning one
+would pin a local path, which is a lock that is wrong on every other machine.
+
+### 7. Everything is pinned by digest, including the resolution
 
 `go.sum` pins artifacts. The lock here pins the artifacts *and* the resolution
 that produced them, so re-resolving from the same manifest is a check rather
@@ -195,7 +232,7 @@ by doing it twice.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
-### 7. No install scripts. Ever.
+### 8. No install scripts. Ever.
 
 This is the one that is not a trade-off.
 
