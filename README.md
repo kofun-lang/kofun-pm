@@ -154,7 +154,43 @@ promised" a question you can answer without a network.
 
 **The cost:** the store is global state, so it needs its own integrity check.
 `kpm verify` is that check, and it is a gate rather than a subcommand nobody
-runs.
+runs — a store whose integrity is only checked when someone remembers is a
+store whose integrity is unknown.
+
+The path is the digest and nothing else — no name, no version, no registry:
+
+```
+<store>/a5/bc10ba19896ce54253d4facc8b60237311bad53c9434f03049a7232179046f
+```
+
+so the same bytes under two names are one entry, and the store's integrity does
+not depend on metadata the bytes do not carry.
+
+**Entries are read-only, and that is not tidiness.** A hard link is the same
+inode, so a writable entry is a file any project can edit *in place* —
+corrupting the dependency for every other project on the machine, silently,
+with no copy left to compare against. `verify` reports a writable entry before
+it has become corruption, because that is the condition under which corruption
+happens without anyone doing anything wrong.
+
+Corruption is **named**, not counted:
+
+```
+store: CORRUPT <store>/a5/bc10ba…
+  expected a5bc10ba19896ce54253d4facc8b60237311bad53c9434f03049a7232179046f
+  actual   92e78d0b032962f47792a9fa95fd981ef63e1e3ef074d536d6304c75eddbe29f
+```
+
+"The store is corrupt" tells an operator to delete all of it. This tells them
+which artifact to fetch again.
+
+Links are hard links; the copy is the path taken across filesystems and on
+filesystems without hard links at all. `KPM_NO_HARDLINK=1` forces it, because a
+fallback that is never exercised is a fallback nobody knows is broken — the
+gate takes both paths on every run.
+
+**What is not here yet:** *every lock entry is present* needs P4. There is no
+fetch, so nothing has arrived to be present.
 
 ### 5. A build output is named by its complete inputs
 
