@@ -112,6 +112,52 @@ fn emit_why_flat(
     return 0
 }
 
+# The same explanations, in the words a person reads. Two lines each: the
+# answer, then the accounting that keeps it honest.
+#
+# The indent is the shell's, not the core's — it says the second line belongs
+# to the first, which is layout rather than content, and the unit suite should
+# be asserting the sentence without having to know how it is arranged on a
+# page.
+fn emit_rendered_why_flat(
+    registry: Registry,
+    requirements: Requirements,
+    module: Int
+) -> Int {
+    let answer: Why = why(requirements, registry, module)
+    print(render_why(module, answer))
+    print("  " + render_bounds(answer))
+    return 0
+}
+
+fn emit_rendered_why(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    module: Int
+) -> Int {
+    let answer: Why = why_of(direct, inherited, registry, module)
+    print(render_why(module, answer))
+    print("  " + render_bounds(answer))
+    return 0
+}
+
+fn emit_rendered_why_workspace(
+    registry: Registry,
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
+    module: Int
+) -> Int {
+    let answer: Why = why_workspace(
+        direct, inherited, members, workspace, registry, module
+    )
+    print(render_why(module, answer))
+    print("  " + render_bounds(answer))
+    return 0
+}
+
 fn main() -> Int {
     # A version is minor.patch inside one major line; the major is part of the
     # identity, so the resolver never compares across it. Printed so the
@@ -315,5 +361,50 @@ fn main() -> Int {
     emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 10)
     emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 20)
     emit_why_workspace(registry, direct, inherited, member_reqs, workspace, 40)
+
+    # --- the same explanations, in words
+    #
+    # Every explanation printed above, in the order it was printed, now as the
+    # sentence a person reads. Both forms are in one recorded output on
+    # purpose: the machine-readable answer and the human-readable one come
+    # from the same `Why` in the same run, so the gate can hold them against
+    # each other. A rendering that drifted from the decision it renders would
+    # be a confident wrong answer to the question a lock diff asks — and that
+    # drift is exactly what nothing catches while the wording lives outside
+    # the resolver.
+    #
+    # Appended rather than interleaved, so every line number the gate already
+    # reads by stays where it is. The integers are not superseded: a sentence
+    # is a bad thing to parse, and `kpm why --json` will want the fields.
+    emit_rendered_why_flat(registry, reqs, 10)
+    emit_rendered_why_flat(registry, reordered, 10)
+    emit_rendered_why_flat(registry, at_ceiling, 10)
+    emit_rendered_why_flat(registry, tied, 10)
+    emit_rendered_why_flat(registry, tied_reordered, 10)
+    emit_rendered_why(registry, direct, inherited, 10)
+    emit_rendered_why(registry, direct, nothing, 10)
+    emit_rendered_why(registry, direct, inherited, 30)
+    emit_rendered_why(registry, direct, inherited, 99)
+    emit_rendered_why_flat(registry, excessive, 20)
+    emit_rendered_why_workspace(
+        registry, direct, inherited, member_reqs, workspace, 10
+    )
+    emit_rendered_why_workspace(
+        registry, direct, inherited, member_reqs, workspace, 20
+    )
+    emit_rendered_why_workspace(
+        registry, direct, inherited, member_reqs, workspace, 40
+    )
+
+    # One refusal the block above never reaches: a module that is required and
+    # published nowhere. Its *resolution* has been recorded since the first
+    # gate, but its explanation had no line of its own, because as integers it
+    # was indistinguishable from a demand above the ceiling — both are kind 3,
+    # and the kind was the whole answer. The sentence is not indistinguishable,
+    # which is the argument for it: "nobody publishes it" and "you asked above
+    # everything published" send a reader to two different fixes.
+    emit_why_flat(registry, reqs, 99)
+    emit_rendered_why_flat(registry, reqs, 99)
+
     return 0
 }

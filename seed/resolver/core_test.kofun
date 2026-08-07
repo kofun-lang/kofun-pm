@@ -715,3 +715,185 @@ fn test_resolve_workspace_is_total() -> Int {
             no_workspace(), demo_registry(), 0)), 1, 6)
     return failures
 }
+
+# ------------------------------------------------------------ the sentence
+#
+# The wording is an output, so it is asserted like one. These tests exist
+# because the sentence used to be assembled by the gate out of seven integers:
+# a gate cannot check a sentence it wrote itself, so the words a user reads
+# were the one part of `why` that nothing pinned.
+#
+# Each test below fixes the phrasing of one branch. That is deliberately
+# brittle — a reworded explanation should have to be a decision someone made,
+# not a diff someone did not notice.
+
+# The app asks for 10 at v2 and the dependency 20 asks for it at v5. Two lower
+# bounds, one of which decides; the requirers differ, which is the whole
+# reason an explanation has something to name.
+fn two_requirements() -> Requirements {
+    return requirements_of(
+        10, 1, 2, 1, app(),
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+}
+
+# The sentence the whole design exists to be able to say. It names the version
+# and the requirement that achieved it, and nothing else, because under a
+# maximum nothing else is part of the justification.
+fn test_a_selection_is_explained_as_the_maximum_it_is() -> Int {
+    let answer: Why = why(two_requirements(), demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(10, answer), "why 10: v5, because 20 requires >= 5"
+    )
+    failures = failures + expect_eq_text(
+        render_bounds(answer),
+        "1 bound agreed; 1 other bound did not decide the answer"
+    )
+    return failures
+}
+
+# The root package is named, not numbered. It is a requirer like any other and
+# the one an explanation names most often, so the code it carries internally
+# should not reach the reader.
+fn test_the_root_package_is_named_rather_than_numbered() -> Int {
+    let reqs: Requirements = requirements_of(
+        10, 1, 7, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(10, why(reqs, demo_registry(), 10)),
+        "why 10: v7, because the root package requires >= 7"
+    )
+    return failures
+}
+
+# A tie says so, in the plural, and reports that removing either bound would
+# leave the selection where it is. An explanation that named one of two equal
+# bounds and stopped would be a wrong answer to "what do I change".
+fn test_a_tie_is_reported_in_the_plural() -> Int {
+    let tied: Requirements = requirements_of(
+        10, 1, 5, 1, 30,
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_bounds(why(tied, demo_registry(), 10)),
+        "2 bounds agreed; 0 other bounds did not decide the answer"
+    )
+    return failures
+}
+
+# The two refusals that are one integer. As `Int` both are kind 3, so the
+# recorded output could not tell them apart and neither could a reader; they
+# send someone to two different fixes — publish it, or lower the demand.
+fn test_the_two_refusals_do_not_share_a_sentence() -> Int {
+    let unpublished: Requirements = requirements_of(
+        99, 1, 1, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let excessive: Requirements = requirements_of(
+        20, 1, 9, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(99, why(unpublished, demo_registry(), 99)),
+        "why 99: nobody publishes it, so there is nothing to explain"
+    )
+    failures = failures + expect_eq_text(
+        render_why(20, why(excessive, demo_registry(), 20)),
+        "why 20: required above everything published, so there is nothing to explain"
+    )
+    failures = failures + expect_ne_text(
+        render_why(99, why(unpublished, demo_registry(), 99)),
+        render_why(20, why(excessive, demo_registry(), 20))
+    )
+    return failures
+}
+
+# Nothing to explain, said as such. A bound of zero renders as "v0", which is
+# a real answer to a different question.
+fn test_an_unrequired_module_is_not_explained_as_version_zero() -> Int {
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(99, why(empty_requirements(), demo_registry(), 99)),
+        "why 99: nothing requires it, so there is nothing to explain"
+    )
+    return failures
+}
+
+# A member is explained by where it comes from. The second line carries the
+# other half of the rule, because the two pull in opposite directions and an
+# explanation that gave only one of them would be half true.
+fn test_a_member_is_explained_as_local_in_words() -> Int {
+    let answer: Why = why_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 20
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(20, answer),
+        "why 20: a workspace member, so there is nothing to fetch"
+    )
+    failures = failures + expect_eq_text(
+        render_bounds(answer),
+        "a member has no version to select, and its own requirements still join the set"
+    )
+    return failures
+}
+
+# The sentence is a function of the requirement set, exactly as the selection
+# is. This is the same claim the resolver has made since its first test, now
+# made about the words: a rendering that moved with slot order would be
+# describing how the set was built rather than what the rule decided.
+fn test_the_sentence_does_not_depend_on_slot_order() -> Int {
+    let one_way: Requirements = requirements_of(
+        10, 1, 2, 1, app(),
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+    let other_way: Requirements = requirements_of(
+        10, 1, 5, 1, 20,
+        0, 0, 0, 0, 0,
+        10, 1, 2, 1, app(),
+        0, 0, 0, 0, 0
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(10, why(one_way, demo_registry(), 10)),
+        render_why(10, why(other_way, demo_registry(), 10))
+    )
+    failures = failures + expect_eq_text(
+        render_bounds(why(one_way, demo_registry(), 10)),
+        render_bounds(why(other_way, demo_registry(), 10))
+    )
+    return failures
+}
+
+# The sentence and the fields are two renderings of one answer, so they must
+# not be able to disagree. Read the version out of the `Why` the sentence was
+# made from, and the sentence must contain it.
+fn test_the_sentence_carries_the_version_the_fields_do() -> Int {
+    let answer: Why = why(two_requirements(), demo_registry(), 10)
+    let mut failures = 0
+    failures = failures + expect_eq_text(
+        render_why(10, answer),
+        "why 10: v" + to_text(answer.version) + ", because "
+            + to_text(answer.requirer) + " requires >= "
+            + to_text(answer.version)
+    )
+    return failures
+}
