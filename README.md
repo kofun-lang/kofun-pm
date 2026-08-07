@@ -1,6 +1,6 @@
 # kofun-pm
 
-Package manager for the [Kofun](https://github.com/hjosugi/kofun) language.
+Package manager for the [Kofun](https://github.com/kofun-lang/kofun) language.
 
 The language already has the pieces: `kofun.toml` selects a package root,
 `kofun.packages.lock` pins artifacts by `sha256`, re-locking is idempotent, and
@@ -167,7 +167,7 @@ are the lanes in [docs/ROADMAP.md](docs/ROADMAP.md), each saying what it is
 blocked on. Nothing here claims a network is implemented.
 
 ```sh
-git clone --recurse-submodules https://github.com/hjosugi/kofun-pm
+git clone --recurse-submodules https://github.com/kofun-lang/kofun-pm
 cd kofun-pm
 sh scripts/dev.sh          # 21 unit tests across two seeds, and the gate
 ```
