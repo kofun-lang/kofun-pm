@@ -556,3 +556,162 @@ fn test_the_explanation_accounts_for_every_bound() -> Int {
             requirement_count(reqs, 10))
     return failures
 }
+
+# ------------------------------------------------------ workspace members
+#
+# Two rules that pull in opposite directions, which is why each is tested on
+# its own: a member's requirements join the set, and a member is never
+# fetched. A test that only checked the second would pass for a workspace that
+# ignored members entirely.
+
+fn demo_workspace() -> Workspace {
+    # 20 is published; 40 is not. Both are members, and both must resolve to
+    # the workspace for the same reason.
+    return workspace_of(20, 1, 40, 1)
+}
+
+fn member_requirements() -> Requirements {
+    return requirements_of(
+        10, 1, 6, 1, 40,
+        40, 1, 1, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+}
+
+fn member_app_requirements() -> Requirements {
+    return requirements_of(
+        10, 1, 2, 1, app(),
+        20, 1, 1, 1, app(),
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0
+    )
+}
+
+# The first rule. A member is an ordinary package as far as its own
+# dependencies go, so its bounds join the union and the maximum rises.
+fn test_a_members_requirements_join_the_set() -> Int {
+    let without: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), empty_requirements(),
+        demo_workspace(), demo_registry(), 10
+    )
+    let with: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 10
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_payload(without), 2)
+    failures = failures + expect_eq_int(resolution_payload(with), 6)
+    # Monotone here too: a member can raise a bound and can never lower one.
+    failures = failures
+        + expect_between_int(resolution_payload(with), resolution_payload(without), 7)
+    return failures
+}
+
+# The second rule, and the case that makes it a rule rather than a fallback:
+# 20 *is* published, at v3. The workspace must still win, or publishing a
+# package could take over a name the workspace owns.
+fn test_a_published_member_still_resolves_to_the_workspace() -> Int {
+    let result: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 20
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_member())
+    failures = failures + expect_eq_int(resolution_payload(result), 20)
+    # The registry does publish it, which is what makes this a real test.
+    failures = failures + expect_eq_int(published_count(demo_registry(), 20), 1)
+    return failures
+}
+
+# And a member nobody publishes resolves the same way. Were the registry
+# consulted first this would be Unpublished — the bug the ordering prevents.
+fn test_an_unpublished_member_resolves_to_the_workspace() -> Int {
+    let result: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 40
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_member())
+    failures = failures + expect_eq_int(published_count(demo_registry(), 40), 0)
+    return failures
+}
+
+# The control. Without it the two tests above would be claims about modules 20
+# and 40 rather than about membership.
+fn test_the_same_module_without_a_workspace_gets_a_version() -> Int {
+    let member: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 20
+    )
+    let plain: Resolution = resolve_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        no_workspace(), demo_registry(), 20
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(member), outcome_member())
+    failures = failures + expect_eq_int(resolution_kind(plain), outcome_selected())
+    failures = failures + expect_eq_int(resolution_payload(plain), 1)
+    return failures
+}
+
+# A module nobody requires is still unrequired, member or not. The question
+# "what version is selected" has no answer for something nothing asked for,
+# and membership does not conjure a requirement.
+fn test_membership_does_not_make_a_module_required() -> Int {
+    let result: Resolution = resolve_workspace(
+        empty_requirements(), empty_requirements(), empty_requirements(),
+        demo_workspace(), demo_registry(), 20
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(resolution_kind(result), outcome_unrequired())
+    return failures
+}
+
+# The explanation follows the resolution: a member is local, not unresolved.
+# Calling it unresolved would send a reader looking for a requirement to
+# change that does not exist.
+fn test_a_member_is_explained_as_local() -> Int {
+    let answer: Why = why_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 20
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.kind, why_local())
+    failures = failures + expect_eq_int(answer.resolution, outcome_member())
+    failures = failures + expect_eq_int(answer.version, 0)
+    return failures
+}
+
+# And the member is nameable as the reason it raised someone else's bound.
+fn test_a_member_can_be_the_reason_for_a_selection() -> Int {
+    let answer: Why = why_workspace(
+        member_app_requirements(), empty_requirements(), member_requirements(),
+        demo_workspace(), demo_registry(), 10
+    )
+    let mut failures = 0
+    failures = failures + expect_eq_int(answer.kind, why_because())
+    failures = failures + expect_eq_int(answer.version, 6)
+    failures = failures + expect_eq_int(answer.requirer, 40)
+    failures = failures + expect_eq_int(answer.agreeing, 1)
+    return failures
+}
+
+# Every resolution is still one of the closed outcomes, workspace included. A
+# sixth constructor that some path forgot would show up here.
+fn test_resolve_workspace_is_total() -> Int {
+    let mut failures = 0
+    failures = failures + expect_between_int(
+        resolution_kind(resolve_workspace(
+            member_app_requirements(), empty_requirements(), member_requirements(),
+            demo_workspace(), demo_registry(), 10)), 1, 6)
+    failures = failures + expect_between_int(
+        resolution_kind(resolve_workspace(
+            member_app_requirements(), empty_requirements(), member_requirements(),
+            demo_workspace(), demo_registry(), 999)), 1, 6)
+    failures = failures + expect_between_int(
+        resolution_kind(resolve_workspace(
+            empty_requirements(), empty_requirements(), empty_requirements(),
+            no_workspace(), demo_registry(), 0)), 1, 6)
+    return failures
+}

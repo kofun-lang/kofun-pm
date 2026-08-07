@@ -101,6 +101,29 @@ explanation is a function of the requirement set exactly as the selection is.
 The gate has a tie arranged with the larger code first, which is the only
 arrangement in which those two rules disagree.
 
+### 3. A workspace member is a package, and is not a dependency
+
+Two rules that pull in opposite directions, so both are stated:
+
+**A member's requirements join the set.** As far as its own dependencies go a
+member is an ordinary package, so a bound it states raises the selection for
+whatever it names. This needs no new algorithm — `max` is associative, so one
+more set is one more `larger`. A solver would need the members in its search
+space.
+
+**A member is never fetched.** As a *dependency* it is not a package at all: it
+is the source tree on disk. So `Member` is its own outcome rather than a
+`Selected` with a special version — a member has no selected version, and
+reporting one would invite a lock to pin a local path, which is a lock that is
+wrong on every other machine.
+
+Membership is decided **before the registry is consulted**, and that ordering is
+the rule rather than an implementation detail: a member that shares a name with
+something published must resolve to the local tree. Were the registry asked
+first, publishing a package could quietly take over a name the workspace owns.
+The gate checks a member that *is* published (and must not resolve to v3) and
+one that is published nowhere (and must not be `Unpublished`).
+
 ### 3. One copy on disk, addressed by content
 
 pnpm's insight: a package version is immutable, so its bytes are its name.

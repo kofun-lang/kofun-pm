@@ -79,6 +79,13 @@ fn outcome_major_mismatch() -> Int {
     return 5
 }
 
+# A module the workspace itself provides. Not a version selection: a member is
+# the source tree on disk, so there is no version to choose and nothing to
+# fetch.
+fn outcome_member() -> Int {
+    return 6
+}
+
 # ---------------------------------------------------------------- values
 
 # What a module offers: its highest published version. MVS never needs the
@@ -158,6 +165,7 @@ type Resolution =
     | AboveHighest(demanded: Int)
     | Unrequired(module: Int)
     | MajorMismatch(found: Int)
+    | Member(module: Int)
 
 # --------------------------------------------------------------- helpers
 
@@ -183,6 +191,7 @@ fn resolution_kind(resolution: Resolution) -> Int {
         AboveHighest(_) => { kind = outcome_above_published() },
         Unrequired(_) => { kind = outcome_unrequired() },
         MajorMismatch(_) => { kind = outcome_major_mismatch() },
+        Member(_) => { kind = outcome_member() },
     }
     return kind
 }
@@ -195,6 +204,7 @@ fn resolution_payload(resolution: Resolution) -> Int {
         AboveHighest(demanded) => { payload = demanded },
         Unrequired(module) => { payload = module },
         MajorMismatch(found) => { payload = found },
+        Member(module) => { payload = module },
     }
     return payload
 }
@@ -443,6 +453,129 @@ fn resolve_closure(
     return Selected(demanded)
 }
 
+# ------------------------------------------------------ workspace members
+#
+# A member is a module the workspace provides from source. Two rules, and they
+# pull in opposite directions, which is why both have to be stated:
+#
+#   A member's requirements join the set. It is a package like any other as
+#   far as *its own* dependencies are concerned, so a bound it states raises
+#   the selection for whatever it names — the union again, and the same
+#   maximum.
+#
+#   A member is never fetched. As a *dependency* it is not a package at all:
+#   it is the source tree on disk. There is no version to select, and the
+#   registry has nothing to say about it.
+#
+# The second is why `Member` is an outcome rather than a `Selected` with a
+# special version. A member does not have a selected version — reporting one
+# would invite a lock to pin it, and a pinned local path is a lock that is
+# wrong on every other machine.
+#
+# It also has to be answered *before* the registry is consulted. A member that
+# happens to share a name with something published must resolve to the local
+# tree, and it must do so whether or not the registry publishes it at all: if
+# the registry decided, then adding a package to the registry could silently
+# take over a name the workspace owns.
+
+fn workspace_capacity() -> Int {
+    return 2
+}
+
+type Workspace = {
+    w0_module: Int,
+    w0_state: Int,
+    w1_module: Int,
+    w1_state: Int,
+}
+
+fn workspace_of(m0: Int, s0: Int, m1: Int, s1: Int) -> Workspace {
+    let value: Workspace = Workspace(
+        w0_module: m0,
+        w0_state: s0,
+        w1_module: m1,
+        w1_state: s1
+    )
+    return value
+}
+
+fn no_workspace() -> Workspace {
+    return workspace_of(0, slot_empty(), 0, slot_empty())
+}
+
+fn is_member(workspace: Workspace, module: Int) -> Int {
+    let hits: Int = workspace.w0_state * eq(workspace.w0_module, module)
+        + workspace.w1_state * eq(workspace.w1_module, module)
+    if hits > 0 {
+        return 1
+    }
+    return 0
+}
+
+# The maximum across three sets, without forming the union.
+#
+# This is the associativity from the transitive section used a second time,
+# and it is the reason a workspace needs no new algorithm: members contribute
+# another set of lower bounds, and max is associative, so one more `larger` is
+# the whole of it. A solver would need the members in its search space.
+fn maximum_across_three(
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    module: Int
+) -> Int {
+    return larger(
+        maximum_across(direct, inherited, module),
+        maximum_required(members, module)
+    )
+}
+
+fn resolve_workspace(
+    direct: Requirements,
+    inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
+    registry: Registry,
+    module: Int
+) -> Resolution {
+    let required: Int = requirement_count(direct, module)
+        + requirement_count(inherited, module)
+        + requirement_count(members, module)
+    if required == 0 {
+        return Unrequired(module)
+    }
+    # Before the registry, and deliberately. A member is the source tree, so
+    # what the registry publishes under that name is not an input to this
+    # answer — otherwise publishing a package could take over a name the
+    # workspace owns.
+    if is_member(workspace, module) == 1 {
+        return Member(module)
+    }
+    if published_count(registry, module) == 0 {
+        return Unpublished(module)
+    }
+    let major: Int = registry_major(registry, module)
+    let direct_mismatch: Int = major_mismatch(direct, module, major)
+    if direct_mismatch >= 0 {
+        return MajorMismatch(direct_mismatch)
+    }
+    let inherited_mismatch: Int = major_mismatch(inherited, module, major)
+    if inherited_mismatch >= 0 {
+        return MajorMismatch(inherited_mismatch)
+    }
+    let member_mismatch: Int = major_mismatch(members, module, major)
+    if member_mismatch >= 0 {
+        return MajorMismatch(member_mismatch)
+    }
+    let demanded: Int = maximum_across_three(
+        direct, inherited, members, module
+    )
+    if demanded > highest_published(registry, module) {
+        return AboveHighest(demanded)
+    }
+    return Selected(demanded)
+}
+
 # --------------------------------------------------------------- why
 #
 # "Why v5?" — "because X requires >= 5."
@@ -482,6 +615,13 @@ fn why_unrequired() -> Int {
 
 fn why_unresolved() -> Int {
     return 3
+}
+
+# A member is explained by where it comes from, not by a bound. Reporting it
+# as unresolved would be wrong in the way that matters: nothing is missing,
+# and there is no requirement to change.
+fn why_local() -> Int {
+    return 4
 }
 
 # No requirer. Above every real code, so `smaller` treats it as the absence it
@@ -561,16 +701,34 @@ fn agreeing_count(requirements: Requirements, module: Int, bound: Int) -> Int {
             * eq(requirements.r3_minimum, bound)
 }
 
-fn why_of(
+fn why_workspace(
     direct: Requirements,
     inherited: Requirements,
+    members: Requirements,
+    workspace: Workspace,
     registry: Registry,
     module: Int
 ) -> Why {
-    let resolution: Resolution = resolve_closure(
-        direct, inherited, registry, module
+    let resolution: Resolution = resolve_workspace(
+        direct, inherited, members, workspace, registry, module
     )
     let kind: Int = resolution_kind(resolution)
+
+    # A member has a reason, and it is not a bound: it comes from the
+    # workspace. Answered before the unresolved case, because "local" is an
+    # answer and "unresolved" would send a reader looking for a requirement to
+    # change that does not exist.
+    if kind == outcome_member() {
+        let local: Why = Why(
+            kind: why_local(),
+            resolution: kind,
+            version: 0,
+            requirer: 0,
+            agreeing: 0,
+            others: 0
+        )
+        return local
+    }
 
     # Nothing requires it, so there is no bound to point at. Answered first,
     # for the same reason `resolve` answers it first: a question about an
@@ -601,18 +759,23 @@ fn why_of(
         return refused
     }
 
-    let bound: Int = maximum_across(direct, inherited, module)
+    let bound: Int = maximum_across_three(direct, inherited, members, module)
     let agreeing: Int = agreeing_count(direct, module, bound)
         + agreeing_count(inherited, module, bound)
+        + agreeing_count(members, module, bound)
     let stated: Int = requirement_count(direct, module)
         + requirement_count(inherited, module)
+        + requirement_count(members, module)
     let explanation: Why = Why(
         kind: why_because(),
         resolution: kind,
         version: bound,
         requirer: smaller(
-            binding_requirer(direct, module, bound),
-            binding_requirer(inherited, module, bound)
+            smaller(
+                binding_requirer(direct, module, bound),
+                binding_requirer(inherited, module, bound)
+            ),
+            binding_requirer(members, module, bound)
         ),
         agreeing: agreeing,
         # The bounds that did not decide the answer — what `kpm why --all`
@@ -623,7 +786,20 @@ fn why_of(
     return explanation
 }
 
-# The flat case, as the closure with nothing inherited. One rule, not two.
+# The closure without a workspace, and the flat set without a closure. One
+# rule throughout: each is the general case with the parts it does not use
+# left empty, rather than a second implementation that could disagree.
+fn why_of(
+    direct: Requirements,
+    inherited: Requirements,
+    registry: Registry,
+    module: Int
+) -> Why {
+    return why_workspace(
+        direct, inherited, no_requirements(), no_workspace(), registry, module
+    )
+}
+
 fn why(requirements: Requirements, registry: Registry, module: Int) -> Why {
     return why_of(requirements, no_requirements(), registry, module)
 }

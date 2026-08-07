@@ -5,7 +5,7 @@ honest boundary statement. Every lane names what it is blocked on.
 
 | lane | first epics | blocked on |
 |---|---|---|
-| P1 resolution | MVS core, transitive requirements, the major-version boundary decision and `why` (**all landed**); workspace members | — |
+| P1 resolution | MVS core, transitive requirements, the major-version boundary decision, `why`, and workspace members — **complete** | — |
 | P2 manifest & lock | `kofun.toml` dependency section; lock format v1 pinning the resolution *and* the artifacts; re-lock idempotence as a gate | the language's `kofun.packages.lock` already pins by sha256 — this extends it |
 | P3 store | content-addressed layout; links rather than copies; `kpm verify` as a gate over the store's own integrity | — |
 | P4 fetch | source identity (URL, the Go move) vs a registry; integrity on arrival; offline as the default rather than a flag | the identity decision, which is its own ADR |
