@@ -167,3 +167,38 @@
 0
 0
 0
+why 10: v5, because 20 requires >= 5
+  1 bound agreed; 1 other bound did not decide the answer
+why 10: v5, because 20 requires >= 5
+  1 bound agreed; 1 other bound did not decide the answer
+why 10: v7, because the root package requires >= 7
+  1 bound agreed; 0 other bounds did not decide the answer
+why 10: v5, because 20 requires >= 5
+  2 bounds agreed; 0 other bounds did not decide the answer
+why 10: v5, because 20 requires >= 5
+  2 bounds agreed; 0 other bounds did not decide the answer
+why 10: v5, because 20 requires >= 5
+  1 bound agreed; 1 other bound did not decide the answer
+why 10: v2, because the root package requires >= 2
+  1 bound agreed; 0 other bounds did not decide the answer
+why 30: v1, because 20 requires >= 1
+  1 bound agreed; 0 other bounds did not decide the answer
+why 99: nothing requires it, so there is nothing to explain
+  no requirement names it, so there is no bound to list
+why 20: required above everything published, so there is nothing to explain
+  nothing was selected, so no bound decided anything
+why 10: v6, because 40 requires >= 6
+  1 bound agreed; 2 other bounds did not decide the answer
+why 20: a workspace member, so there is nothing to fetch
+  a member has no version to select, and its own requirements still join the set
+why 40: a workspace member, so there is nothing to fetch
+  a member has no version to select, and its own requirements still join the set
+99
+3
+2
+0
+0
+0
+0
+why 99: nobody publishes it, so there is nothing to explain
+  nothing was selected, so no bound decided anything

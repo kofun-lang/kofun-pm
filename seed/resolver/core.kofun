@@ -804,6 +804,104 @@ fn why(requirements: Requirements, registry: Registry, module: Int) -> Why {
     return why_of(requirements, no_requirements(), registry, module)
 }
 
+# ----------------------------------------------------------- the sentence
+#
+# Until now this file could work out an explanation and not say it. The
+# executable slice took Int in and gave Int out, so a `Why` left here as seven
+# integers and the sentence was assembled in `awk`, by the gate — the one
+# claim about the resolver that lived outside the resolver. `Text` results and
+# `to_text(Int)` are in the slice now, so the wording moves here.
+#
+# It moves as a *value*. `resolve` returns a `Resolution`, `why` returns a
+# `Why`, and `render_why` returns a `Text`; the core still prints nothing and
+# the shell still prints everything. The hygiene rule the gate enforces is
+# unchanged, because forming a sentence is not an effect.
+#
+# The reason to care is not tidiness. A sentence the gate assembles is a
+# sentence the gate cannot check: it would be comparing its own output with
+# itself, and the wording a user reads would be pinned nowhere. A sentence
+# produced here is an output like any other — the unit suite asserts it byte
+# for byte, and the gate reads it instead of writing it.
+
+fn bounds_word(count: Int) -> Text {
+    if count == 1 {
+        return "bound"
+    }
+    return "bounds"
+}
+
+# The root package is a requirer like any other and is named more often than
+# any other, so it is named rather than numbered. `app()` has carried that
+# comment since the first version of this file; a projection that could only
+# return Int could not act on it.
+fn requirer_name(requirer: Int) -> Text {
+    if requirer == app() {
+        return "the root package"
+    }
+    return to_text(requirer)
+}
+
+# The answer, in one line: the selection and the single requirement that
+# achieved it.
+#
+# Every branch that is not a selection ends in the same six words, because
+# they are the same fact and a reader scanning a lock diff should not have to
+# tell four phrasings of "there is nothing to explain" apart. What differs is
+# what is put before them, and each names the observation it was made from
+# rather than describing it — the refusal a reader must act on is not
+# "unresolved", it is *which* refusal.
+fn render_why(module: Int, answer: Why) -> Text {
+    if answer.kind == why_because() {
+        return "why " + to_text(module) + ": v" + to_text(answer.version)
+            + ", because " + requirer_name(answer.requirer) + " requires >= "
+            + to_text(answer.version)
+    }
+    if answer.kind == why_local() {
+        return "why " + to_text(module)
+            + ": a workspace member, so there is nothing to fetch"
+    }
+    if answer.kind == why_unrequired() {
+        return "why " + to_text(module)
+            + ": nothing requires it, so there is nothing to explain"
+    }
+    if answer.resolution == outcome_unpublished() {
+        return "why " + to_text(module)
+            + ": nobody publishes it, so there is nothing to explain"
+    }
+    if answer.resolution == outcome_above_published() {
+        return "why " + to_text(module)
+            + ": required above everything published, so there is nothing to explain"
+    }
+    if answer.resolution == outcome_major_mismatch() {
+        return "why " + to_text(module)
+            + ": required across a major boundary, so there is nothing to explain"
+    }
+    return "why " + to_text(module)
+        + ": not resolved, so there is nothing to explain"
+}
+
+# The second line, and the reason there is a second line at all: an answer
+# that named one requirer and stopped would imply that removing it lowers the
+# selection, which is true only when exactly one bound agreed. So the count is
+# said out loud, and so is the number of bounds the maximum passed over —
+# those are what `kpm why --all` would list, and a reader deciding whether a
+# bound is worth changing needs to know they exist.
+fn render_bounds(answer: Why) -> Text {
+    if answer.kind == why_because() {
+        return to_text(answer.agreeing) + " " + bounds_word(answer.agreeing)
+            + " agreed; " + to_text(answer.others) + " other "
+            + bounds_word(answer.others) + " did not decide the answer"
+    }
+    if answer.kind == why_local() {
+        return "a member has no version to select, and its own requirements"
+            + " still join the set"
+    }
+    if answer.kind == why_unrequired() {
+        return "no requirement names it, so there is no bound to list"
+    }
+    return "nothing was selected, so no bound decided anything"
+}
+
 # ------------------------------------------------------------ constructors
 
 fn requirements_of(
