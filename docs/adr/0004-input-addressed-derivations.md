@@ -41,9 +41,20 @@ A build output is identified by the digest of its complete input closure:
 derivation = digest(
     sorted( source digest, each dependency's derivation digest ),
     toolchain digest,
-    build settings digest
+    output kind,
+    target,
+    backend,
+    foreign ABI,
+    framework,
+    debug-info mode
 )
 ```
+
+Each category and setting is framed by its own domain before its value. Output
+paths and offline acquisition are deliberately absent because they do not
+change the artifact's bytes. Linked libraries and a WASI manifest do change
+the bytes, so they are artifact inputs with their own digests rather than
+settings collapsed into an opaque integer.
 
 Three properties follow, and `seed/derivation/` proves each of them in the
 language's own executable slice rather than asserting them:
@@ -53,9 +64,11 @@ language's own executable slice rather than asserting them:
    so the same set in any order gives the same identity. This is the same
    discipline the resolver uses for the same reason.
 2. **Completeness.** Changing any input — a source byte, a dependency, the
-   toolchain, a setting — changes the identity. An input that could change
-   without changing the identity is an input the cache would ignore, which is
-   exactly how a cache serves the wrong thing.
+   toolchain, or any of the six named build settings — changes the identity.
+   An input that could change without changing the identity is an input the
+   cache would ignore, which is exactly how a cache serves the wrong thing.
+   The gate derives the settings inventory from `BuildSettings` and refuses a
+   field that is not carried into `Closure` and folded through its own domain.
 3. **Transitivity.** A dependency contributes its *derivation* digest, not its
    source digest, so a change deep in the graph reaches every dependent. A
    scheme that hashed only direct sources would let a rebuilt dependency go
@@ -73,9 +86,10 @@ describing a heuristic.
 
 **The cost: everything must be in the closure, including the toolchain.** A
 build that depends on something unhashed is a build whose cache can be wrong,
-so the toolchain digest is not optional and neither are build settings. That
-is more bookkeeping than a conventional build system needs, and it is the
-whole price of the property.
+so the toolchain digest is not optional and neither are output kind, target,
+backend, foreign ABI, framework, or debug-info mode. That is more bookkeeping
+than a conventional build system needs, and it is the whole price of the
+property.
 
 **The second cost: input-addressing rebuilds more than content-addressing.**
 Changing a comment in a dependency changes its derivation digest and rebuilds

@@ -38,15 +38,16 @@
 #
 # So a `kpm` surface cannot be declared today even as a shell around
 # placeholder actions, because the surface is a property of the action rather
-# than of the command. That is issue #7, and it is named rather than worked
-# around: this repository does not ship a CLI whose commands do nothing.
+# than of the command. That is issue #5, with the framework change tracked as
+# kofun#1551, and it is named rather than worked around: this repository does
+# not ship a CLI whose commands do nothing.
 #
 # The resolver those commands will call already exists and is gated —
 # `seed/resolver/` — so what is missing is the binding, not the work.
 
 cli Kpm {
     name "kpm"
-    version "0.1.0"
+    version "0.2.0"
     about "Package manager for Kofun: minimal version selection, content-addressed store, no install scripts"
 
     command lock {

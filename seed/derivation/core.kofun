@@ -26,10 +26,10 @@
 #                       same set in any order gives the same identity;
 #
 #   completeness        changing any input — a source, a dependency, the
-#                       toolchain, a setting — changes the identity. An input
-#                       that could change without changing it is an input the
-#                       cache would ignore, which is how a cache serves the
-#                       wrong thing;
+#                       toolchain, or any output-affecting build setting —
+#                       changes the identity. An input that could change
+#                       without changing it is an input the cache would
+#                       ignore, which is how a cache serves the wrong thing;
 #
 #   transitivity        a dependency contributes its *derivation* digest, not
 #                       its source digest, so a change deep in the graph
@@ -68,6 +68,43 @@ fn absent_digest() -> Int {
     return 0
 }
 
+# Domain tags make the closure's schema part of the identity. Without them,
+# adding a setting in one position and removing another could leave an
+# otherwise equal sequence of integers, even though the two builds mean
+# different things. The tags are values in this projection; sha256 will frame
+# the same domains when Bytes replaces the fold.
+fn inputs_domain() -> Int {
+    return 101
+}
+
+fn toolchain_domain() -> Int {
+    return 102
+}
+
+fn setting_output_kind_domain() -> Int {
+    return 201
+}
+
+fn setting_target_domain() -> Int {
+    return 202
+}
+
+fn setting_backend_domain() -> Int {
+    return 203
+}
+
+fn setting_foreign_abi_domain() -> Int {
+    return 204
+}
+
+fn setting_framework_domain() -> Int {
+    return 205
+}
+
+fn setting_debug_info_domain() -> Int {
+    return 206
+}
+
 # ---------------------------------------------------------------- values
 
 # One input to a build: a source, or a dependency's derivation.
@@ -80,13 +117,33 @@ type Input = {
     state: Int,
 }
 
+# The output-affecting settings exposed by `kofun build`.
+#
+# `output_kind` distinguishes an executable from an emitted-C result. `target`
+# names the target profile, `backend` the selected compiler path,
+# `foreign_abi` the explicit C ABI profile, `framework` an application
+# framework, and `debug_info` whether debug metadata is part of the output.
+#
+# Output paths and `--offline` do not belong here: they change where or how an
+# artifact is obtained, not its bytes. Linked libraries and a WASI manifest do
+# affect bytes, but they are artifacts in the input slots and contribute their
+# own digests rather than being collapsed into settings.
+type BuildSettings = {
+    output_kind: Int,
+    target: Int,
+    backend: Int,
+    foreign_abi: Int,
+    framework: Int,
+    debug_info: Int,
+}
+
 # The complete closure of one build.
 #
-# `toolchain` and `settings` are not optional and are not inputs among the
-# others: they are always present, so they fold in at fixed positions rather
-# than competing for a slot. A build whose toolchain was outside the closure
-# is a build whose cache can be wrong, which is the whole price of the
-# property.
+# `toolchain` and every `setting_*` field are not optional and are not inputs
+# among the others: they are always present, so they fold in at fixed,
+# domain-separated positions rather than competing for a slot. A build whose
+# toolchain or target mode was outside the closure is a build whose cache can
+# be wrong, which is the whole price of the property.
 type Closure = {
     i0_digest: Int,
     i0_state: Int,
@@ -97,7 +154,12 @@ type Closure = {
     i3_digest: Int,
     i3_state: Int,
     toolchain: Int,
-    settings: Int,
+    setting_output_kind: Int,
+    setting_target: Int,
+    setting_backend: Int,
+    setting_foreign_abi: Int,
+    setting_framework: Int,
+    setting_debug_info: Int,
 }
 
 # What a closure resolves to. `Derived` carries the identity; the refusals
@@ -214,6 +276,25 @@ fn mix(accumulator: Int, value: Int) -> Int {
     return (accumulator * mix_multiplier() + value) % mix_modulus()
 }
 
+# Every scalar that is not one of the sorted artifact inputs carries its
+# domain immediately before its value. Field position alone is not the
+# contract: the name of the field is part of what is folded.
+fn mix_domain(accumulator: Int, domain: Int, value: Int) -> Int {
+    return mix(mix(accumulator, domain), value)
+}
+
+# Kept as one deliberately mechanical list. `tests/pm/check.sh` reads the
+# BuildSettings declaration and requires every field to have a matching line
+# here, so adding a build setting without reaching the closure fails the gate.
+fn fold_settings(accumulator: Int, closure: Closure) -> Int {
+    let after_output_kind: Int = mix_domain(accumulator, setting_output_kind_domain(), closure.setting_output_kind)
+    let after_target: Int = mix_domain(after_output_kind, setting_target_domain(), closure.setting_target)
+    let after_backend: Int = mix_domain(after_target, setting_backend_domain(), closure.setting_backend)
+    let after_foreign_abi: Int = mix_domain(after_backend, setting_foreign_abi_domain(), closure.setting_foreign_abi)
+    let after_framework: Int = mix_domain(after_foreign_abi, setting_framework_domain(), closure.setting_framework)
+    return mix_domain(after_framework, setting_debug_info_domain(), closure.setting_debug_info)
+}
+
 fn live_inputs(closure: Closure) -> Int {
     return closure.i0_state
         + closure.i1_state
@@ -262,20 +343,42 @@ fn derive(closure: Closure) -> Derivation {
     if live_inputs(closure) == 0 {
         return NoInputs(closure.toolchain)
     }
-    # Sorted inputs first, then the toolchain, then the settings. The last two
-    # are at fixed positions because they are always present; putting them
-    # through the sort would let a toolchain digest trade places with a source
-    # digest and produce the same identity for two different builds.
+    # Sorted inputs first, then the toolchain, then every named setting. Each
+    # category is domain-separated and the last two categories are at fixed
+    # positions because they are always present; putting them through the sort
+    # would let a toolchain digest trade places with a source digest and produce
+    # the same identity for two different builds.
+    let after_input_domain: Int = mix(1, inputs_domain())
     let after_inputs: Int = mix(
-        mix(mix(mix(1, sorted_0(closure)), sorted_1(closure)),
+        mix(mix(mix(after_input_domain, sorted_0(closure)), sorted_1(closure)),
             sorted_2(closure)),
         sorted_3(closure)
     )
-    let after_toolchain: Int = mix(after_inputs, closure.toolchain)
-    return Derived(mix(after_toolchain, closure.settings))
+    let after_toolchain: Int = mix_domain(
+        after_inputs, toolchain_domain(), closure.toolchain)
+    return Derived(fold_settings(after_toolchain, closure))
 }
 
 # ------------------------------------------------------------ constructors
+
+fn settings_of(
+    output_kind: Int,
+    target: Int,
+    backend: Int,
+    foreign_abi: Int,
+    framework: Int,
+    debug_info: Int
+) -> BuildSettings {
+    let value: BuildSettings = BuildSettings(
+        output_kind: output_kind,
+        target: target,
+        backend: backend,
+        foreign_abi: foreign_abi,
+        framework: framework,
+        debug_info: debug_info
+    )
+    return value
+}
 
 fn closure_of(
     d0: Int, s0: Int,
@@ -283,7 +386,7 @@ fn closure_of(
     d2: Int, s2: Int,
     d3: Int, s3: Int,
     toolchain: Int,
-    settings: Int
+    settings: BuildSettings
 ) -> Closure {
     let value: Closure = Closure(
         i0_digest: d0,
@@ -295,7 +398,12 @@ fn closure_of(
         i3_digest: d3,
         i3_state: s3,
         toolchain: toolchain,
-        settings: settings
+        setting_output_kind: settings.output_kind,
+        setting_target: settings.target,
+        setting_backend: settings.backend,
+        setting_foreign_abi: settings.foreign_abi,
+        setting_framework: settings.framework,
+        setting_debug_info: settings.debug_info
     )
     return value
 }

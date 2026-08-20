@@ -7,8 +7,8 @@ fn tool() -> Int {
     return 7001
 }
 
-fn settings() -> Int {
-    return 42
+fn settings() -> BuildSettings {
+    return settings_of(1, 2, 3, 4, 5, 6)
 }
 
 fn two_inputs(first: Int, second: Int) -> Closure {
@@ -77,11 +77,57 @@ fn test_changing_the_toolchain_changes_the_identity() -> Int {
     return failures
 }
 
-fn test_changing_a_setting_changes_the_identity() -> Int {
-    let a: Closure = closure_of(500, slot_live(), 900, slot_live(),
-        0, slot_empty(), 0, slot_empty(), tool(), 42)
-    let b: Closure = closure_of(500, slot_live(), 900, slot_live(),
-        0, slot_empty(), 0, slot_empty(), tool(), 43)
+fn closure_with_settings(value: BuildSettings) -> Closure {
+    return closure_of(500, slot_live(), 900, slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool(), value)
+}
+
+# Each output-affecting setting gets its own mutation. A single opaque
+# `settings` integer could only prove that one integer moved; these prove that
+# every declared dimension reaches the identity.
+fn test_changing_the_output_kind_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(11, 2, 3, 4, 5, 6))
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_the_target_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(1, 12, 3, 4, 5, 6))
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_the_backend_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(1, 2, 13, 4, 5, 6))
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_the_foreign_abi_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(1, 2, 3, 14, 5, 6))
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_the_framework_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(1, 2, 3, 4, 15, 6))
+    let mut failures = 0
+    failures = failures + expect_ne_int(identity_of(a), identity_of(b))
+    return failures
+}
+
+fn test_changing_debug_info_changes_the_identity() -> Int {
+    let a: Closure = closure_with_settings(settings())
+    let b: Closure = closure_with_settings(settings_of(1, 2, 3, 4, 5, 16))
     let mut failures = 0
     failures = failures + expect_ne_int(identity_of(a), identity_of(b))
     return failures
@@ -166,7 +212,8 @@ fn test_derive_is_total() -> Int {
         derivation_kind(derive(two_inputs(1, 2))), 1, 3)
     failures = failures + expect_between_int(
         derivation_kind(derive(closure_of(0, slot_empty(), 0, slot_empty(),
-            0, slot_empty(), 0, slot_empty(), 0, 0))), 1, 3)
+            0, slot_empty(), 0, slot_empty(), 0,
+            settings_of(0, 0, 0, 0, 0, 0)))), 1, 3)
     failures = failures + expect_between_int(
         derivation_kind(derive(closure_of(0 - 5, slot_live(), 0, slot_empty(),
             0, slot_empty(), 0, slot_empty(), tool(), settings()))), 1, 3)

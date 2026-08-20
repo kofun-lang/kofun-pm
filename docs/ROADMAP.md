@@ -6,24 +6,25 @@ honest boundary statement. Every lane names what it is blocked on.
 | lane | first epics | blocked on |
 |---|---|---|
 | P1 resolution | MVS core, transitive requirements, the major-version boundary decision, `why`, and workspace members — **complete** | — |
-| P2 manifest & lock | dependency surface, lock format v1 pinning the resolution, re-lock idempotence and the three refusals — **landed**; artifacts wait on P4, which is what there is to pin | the language's `kofun.packages.lock` already pins by sha256 — this extends it |
-| P3 store | content-addressed layout, links with a copy fallback, and `verify` as a gate — **landed**; "every lock entry is present" waits on P4, which is what puts entries there | — |
-| P4 fetch | source identity (URL, the Go move) vs a registry; integrity on arrival; offline as the default rather than a flag | the identity decision, which is its own ADR |
-| P5 cli | `kpm add/lock/verify/tree/why`; the explanation itself is **landed** in `seed/resolver/`, so P5 binds a command to it rather than deciding what it should say | P1, P2 |
-| P6 publishing | who may publish a name; signing; immutability of a published version | P4's identity decision |
+| P2 manifest & lock | dependency surface, lock format v1 pinning the resolution, re-lock idempotence and the three refusals — **landed**; artifact rows remain | [#14](https://github.com/kofun-lang/kofun-pm/issues/14), which defines what there is to pin |
+| P3 store | content-addressed layout, links with a copy fallback, and `verify` as a gate — **landed**; "every lock entry is present" remains | [#14](https://github.com/kofun-lang/kofun-pm/issues/14), which puts artifacts in the store |
+| P4 fetch | URL identity is **decided** in ADR 3; the version-to-artifact contract, integrity on arrival, atomic visibility, and offline-by-default gate remain | [#14](https://github.com/kofun-lang/kofun-pm/issues/14); Kofun inputs are [#1258](https://github.com/kofun-lang/kofun/issues/1258) and [#1499](https://github.com/kofun-lang/kofun/issues/1499) upstream |
+| P5 cli | `kpm add/lock/verify/tree/why`; the explanation itself is **landed** in `seed/resolver/`, so P5 binds a command to it rather than deciding what it should say | [kofun#1551](https://github.com/kofun-lang/kofun/issues/1551), general native CLI action binding |
+| P6 publishing | what a URL host publishes; signing; immutability of a published version | P4's artifact contract in #14 |
 | P7 build integration | dependencies reaching `kofun build`; the build-target answer to what install scripts used to do | the language's build system contract |
 
 ## Sequencing
 
 ```
-now ──► P1 resolution + P2 manifest/lock     (pure, unblocked, the identity of the tool)
-     ──► P3 store + P4 fetch                 (once identity is decided)
-     ──► P5 cli
+now ──► P1 resolution + P2 manifest/lock + P3 store   (landed foundations)
+     ├─► P4 fetch contract and implementation         (#14)
+     └─► P5 cli binding                               (upstream #1551)
 later ─► P6, P7
 ```
 
 ## What is deliberately not here
 
-No registry service. Whether Kofun needs one, or whether source identity by
-URL is enough as it was for Go, is an open decision — and building a registry
-before making it would answer it by accident.
+No registry service. ADR 3 chose URL identity and records its cost: discovery,
+deprecation, and revocation have no central authority. P4 defines how a version
+at that identity yields immutable metadata and bytes without quietly creating
+a registry under another name.

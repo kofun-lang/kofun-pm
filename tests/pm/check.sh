@@ -382,6 +382,26 @@ grep -qE '^[[:space:]]*print\(' "$WORK/dcore.code" &&
 grep -qE 'clock_gettime|getenv|fopen|socket\(|import ' "$WORK/dcore.code" &&
     fail 'the derivation core names ambient state — the closure would be incomplete'
 
+# BuildSettings is the declared inventory of output-affecting settings. Every
+# field must be flattened into Closure and must be folded beside its own domain
+# tag. This is the forward-looking half of completeness: adding a setting to
+# the inventory without making it reach the identity fails here, before a
+# cache can ignore it.
+sed -n '/^type BuildSettings = {$/,/^}$/p' "$WORK/dcore.code" |
+    sed -n 's/^[[:space:]]*\([a-z][a-z0-9_]*\):[[:space:]]*Int,$/\1/p' \
+    >"$WORK/build-setting.fields"
+test -s "$WORK/build-setting.fields" ||
+    fail 'the derivation core declares no build settings'
+sed -n '/^fn fold_settings(/,/^}/p' "$WORK/dcore.code" \
+    >"$WORK/build-setting.fold"
+while IFS= read -r setting; do
+    grep -Fq "setting_${setting}: Int," "$WORK/dcore.code" ||
+        fail "build setting '$setting' is not carried by Closure"
+    grep -Eq "mix_domain\([^,]+, setting_${setting}_domain\(\), closure\.setting_${setting}\)" \
+        "$WORK/build-setting.fold" ||
+        fail "build setting '$setting' does not reach the derivation identity through its own domain"
+done <"$WORK/build-setting.fields"
+
 dseed="$WORK/derivation.unit.kofun"
 cat "$dcore" >"$dseed"
 printf '\n' >>"$dseed"
@@ -432,9 +452,18 @@ test "$(id_of 4)" != "$(id_of 6)" ||
 test "$(id_of 4)" != "$(id_of 7)" ||
     fail 'a changed toolchain left the identity unmoved; the build is impure'
 
+# Each named build setting is inside the closure. One opaque settings integer
+# could not say which of these was forgotten.
+setting_label=7
+while IFS= read -r setting; do
+    setting_label=$((setting_label + 1))
+    test "$(id_of 4)" != "$(id_of "$setting_label")" ||
+        fail "a changed $setting setting left the identity unmoved; the cache would serve the wrong build"
+done <"$WORK/build-setting.fields"
+
 # The refusals, by kind: 2 NoInputs, 3 ReservedDigest.
-test "$(kind_of 8)" = 2 || fail 'an empty closure was not refused'
-test "$(kind_of 9)" = 3 || fail 'a reserved digest in a live slot was not refused'
+test "$(kind_of 14)" = 2 || fail 'an empty closure was not refused'
+test "$(kind_of 15)" = 3 || fail 'a reserved digest in a live slot was not refused'
 
 # ============================================ the CLI surface and its shape
 #
@@ -442,6 +471,14 @@ test "$(kind_of 9)" = 3 || fail 'a reserved digest in a live slot was not refuse
 
 kcli="$ROOT/contracts/kpm-cli.kofun"
 test -f "$kcli" || fail 'the CLI contract is missing'
+version_file="$ROOT/VERSION"
+test -f "$version_file" || fail 'the source release version is missing'
+test "$(wc -l <"$version_file" | tr -d ' ')" -eq 1 &&
+    grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' "$version_file" ||
+    fail 'VERSION must contain exactly one semantic version'
+project_version=$(sed -n '1p' "$version_file")
+grep -Fq "    version \"$project_version\"" "$kcli" ||
+    fail "the CLI contract version does not match VERSION $project_version"
 
 for declaration in \
     'cli Kpm {' \

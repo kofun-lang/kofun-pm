@@ -20,7 +20,7 @@ fn main() -> Int {
     print(input_capacity())
 
     let tool: Int = 7001
-    let settings: Int = 42
+    let settings: BuildSettings = settings_of(1, 2, 3, 4, 5, 6)
 
     # A leaf: one source.
     let leaf: Closure = closure_of(
@@ -69,14 +69,48 @@ fn main() -> Int {
         0, slot_empty(), 0, slot_empty(), 7002, settings)
     emit(7, app_new_tool)
 
+    # Every build setting moves separately. These six lines are deliberately
+    # repetitive: the golden and gate can name the exact field that was
+    # omitted rather than accepting one opaque settings digest.
+    let app_new_output_kind: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(11, 2, 3, 4, 5, 6))
+    emit(8, app_new_output_kind)
+    let app_new_target: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(1, 12, 3, 4, 5, 6))
+    emit(9, app_new_target)
+    let app_new_backend: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(1, 2, 13, 4, 5, 6))
+    emit(10, app_new_backend)
+    let app_new_foreign_abi: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(1, 2, 3, 14, 5, 6))
+    emit(11, app_new_foreign_abi)
+    let app_new_framework: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(1, 2, 3, 4, 15, 6))
+    emit(12, app_new_framework)
+    let app_new_debug_info: Closure = closure_of(
+        1000, slot_live(), identity_of(dep), slot_live(),
+        0, slot_empty(), 0, slot_empty(), tool,
+        settings_of(1, 2, 3, 4, 5, 16))
+    emit(13, app_new_debug_info)
+
     # The refusals.
     let empty: Closure = closure_of(
         0, slot_empty(), 0, slot_empty(),
         0, slot_empty(), 0, slot_empty(), tool, settings)
-    emit(8, empty)
+    emit(14, empty)
     let reserved: Closure = closure_of(
         500, slot_live(), absent_digest(), slot_live(),
         0, slot_empty(), 0, slot_empty(), tool, settings)
-    emit(9, reserved)
+    emit(15, reserved)
     return 0
 }

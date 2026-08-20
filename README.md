@@ -35,8 +35,10 @@ because the framework's action set is four fixed contracts and its reference
 says so plainly. The restriction is tighter than it reads: an action fixes its
 option *names*, so a surface cannot be declared even around placeholder
 actions. Binding them is [P5](https://github.com/kofun-lang/kofun-pm/issues/5),
-and it waits on the framework rather than on this repository. `kpm` does not
-ship a CLI whose commands do nothing.
+and it waits on the framework's
+[arbitrary-action contract](https://github.com/kofun-lang/kofun/issues/1551)
+rather than on this repository. `kpm` does not ship a CLI whose commands do
+nothing.
 
 ## Eight decisions, each with what it costs
 
@@ -213,7 +215,11 @@ independence, completeness, and transitivity — in the language's own slice.
 Breaking each one fails the test named for it: dropping the toolchain from the
 closure fails `test_changing_the_toolchain_changes_the_identity`, folding
 inputs unsorted fails the two order tests, and letting a dependency contribute
-its source instead of its derivation fails three at once.
+its source instead of its derivation fails three at once. Build settings are
+not one opaque digest: output kind, target, backend, foreign ABI, framework,
+and debug-info mode each have a domain and a mutation test. The gate reads that
+inventory, so adding a setting without carrying and folding it fails before a
+cache can ignore it.
 
 **The cost:** everything must be in the closure, including the toolchain and
 the build settings, which is more bookkeeping than a conventional build needs.
@@ -314,7 +320,7 @@ what the gate claims — only who is making the claim.
 ```sh
 git clone --recurse-submodules https://github.com/kofun-lang/kofun-pm
 cd kofun-pm
-sh scripts/dev.sh          # 52 unit tests across two seeds, and the gate
+sh scripts/dev.sh          # 57 unit tests across two seeds, and the gate
 ```
 
 ## Learning from, and the line drawn

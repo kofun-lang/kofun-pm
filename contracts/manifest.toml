@@ -4,8 +4,8 @@
 # `contracts/kpm-cli.kofun`: a surface written down before anything reads it,
 # so that what the resolver consumes is a decision on the page rather than
 # whatever a parser happens to accept first. Nothing parses it yet — that
-# arrives with the CLI binding, issue #7 — and the gate pins its shape so it
-# cannot quietly grow fields the resolver has no use for.
+# arrives with the CLI binding, issue #5 (upstream kofun#1551) — and the gate
+# pins its shape so it cannot quietly grow fields the resolver has no use for.
 #
 # It lives here rather than at the repository root because a root `kofun.toml`
 # makes the language hand the build to its own build system, and this
