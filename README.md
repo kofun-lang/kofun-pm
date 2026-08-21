@@ -40,7 +40,7 @@ and it waits on the framework's
 rather than on this repository. `kpm` does not ship a CLI whose commands do
 nothing.
 
-## Eight decisions, each with what it costs
+## Nine decisions, each with what it costs
 
 A package is identified by **where it lives** — a URL, as in Go. There is no
 registry and none is planned; the question "who owns this name" has the same
@@ -195,7 +195,30 @@ gate takes both paths on every run.
 **What is not here yet:** *every lock entry is present* needs P4. There is no
 fetch, so nothing has arrived to be present.
 
-### 5. A build output is named by its complete inputs
+### 5. Fetch is explicit; everything after it is offline
+
+A package URL serves a bounded static catalog, digest-pinned metadata, and
+source/data file blobs. `kpm fetch` is the only operation allowed to contact
+those endpoints, and it requires an explicit approved-origin authority file.
+It verifies metadata and every file before writing lock v2;
+`lock`, `verify`, resolution, and build have no network mode at all.
+
+The P4 implementation will make files arrive individually by digest rather
+than inside an archive. This makes
+the first fetch chattier, but removes archive traversal, symlinks, executable
+bits, decompression bombs, and install hooks from the protocol. ADR 7 requires
+no-replace store publication, winner rehash, and a same-handle handoff; the
+current shell store does not yet satisfy those properties and #14 remains open
+until executable evidence does.
+
+**The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
+and data files only, and explicit size/count bounds. Supporting bundles,
+pre-releases, `0.x`, or target-specific artifacts requires a visible protocol
+revision rather than an unknown field that old clients misread.
+[ADR 7](docs/adr/0007-static-url-fetch-protocol.md) fixes the endpoints, strict
+metadata, redirect boundary, lock v2 migration, and recovery semantics.
+
+### 6. A build output is named by its complete inputs
 
 Go stops at fetch reproducibility: `go.sum` pins the bytes that arrived, and
 what happens next is the build system's business. Nix goes further — a build
@@ -229,7 +252,7 @@ identical. Nix has the same issue; the successor is content-addressed
 derivations, which is a later and harder decision, named in
 [ADR 4](docs/adr/0004-input-addressed-derivations.md) rather than ignored.
 
-### 6. The lock pins the resolution, not only the artifacts
+### 7. The lock pins the resolution, not only an output
 
 ```
 # format: kofun-pm.lock/v1
@@ -241,11 +264,13 @@ derivations, which is a later and harder decision, named in
 # digest: 28cb369b…
 ```
 
-`go.sum` pins the bytes that arrived. This also pins **what was resolved and
-what it was resolved from** — which is only worth doing because MVS is a
-function. Re-resolving the same requirements must give the same answer, so
-`kpm verify` is a check rather than a hope. A lock over a *search* cannot make
-that claim, which is why locks over searches pin outputs only.
+The current lock v1 pins **what was resolved and what it was resolved from** —
+which is only worth doing because MVS is a function. Re-resolving the same
+requirements must give the same answer, so `kpm verify` is a check rather than
+a hope. A lock over a *search* cannot make that claim, which is why locks over
+searches pin outputs only. ADR 7's lock v2 adds every visited rough-graph
+metadata descriptor and every selected file digest; that serialization lands
+with P4 rather than being claimed by v1.
 
 That buys four failures where other tools have one, and "the lock is wrong"
 sends a reader nowhere. The tool identity is the SHA-256 of a domain-framed
@@ -270,16 +295,18 @@ selection — the edit worth making, and the one nobody would notice.
 A workspace member is recorded as a member and carries no version. Pinning one
 would pin a local path, which is a lock that is wrong on every other machine.
 
-### 7. Everything is pinned by digest, including the resolution
+### 8. Every lock identity is a digest
 
-`go.sum` pins artifacts. The lock here pins the artifacts *and* the resolution
-that produced them, so re-resolving from the same manifest is a check rather
-than a hope: same manifest → same lock, byte-identical, which the gate proves
-by doing it twice.
+Lock v1 digests the requirements, the resolver/tool input closure, and its own
+complete body. Lock v2 also records the catalog-authenticated metadata digest
+and every source/data file digest. Re-resolving from the same manifest and
+pinned inputs is therefore a check rather than a hope: same inputs → same lock,
+byte-identical. The gate proves that property for v1 today; P4 extends the same
+gate to v2 rather than weakening it for fetched inputs.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
-### 8. No install scripts. Ever.
+### 9. No install scripts. Ever.
 
 This is the one that is not a trade-off.
 

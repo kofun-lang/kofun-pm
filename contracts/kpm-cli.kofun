@@ -30,7 +30,7 @@
 # module system". The restriction is tighter than it first reads: an action
 # fixes its option *names*, not only their types. Declaring
 #
-#     option offline "--offline" bool "Refuse to fetch"
+#     option out "--out" text "Where to write the lock"
 #
 # under `action greet` is refused with
 #
@@ -47,19 +47,29 @@
 
 cli Kpm {
     name "kpm"
-    version "0.2.1"
+    version "0.3.0"
     about "Package manager for Kofun: minimal version selection, content-addressed store, no install scripts"
 
-    command lock {
-        about "Resolve the manifest and write the lock"
+    command fetch {
+        about "Explicitly acquire metadata and file blobs, then write lock v2"
         position MANIFEST "Path to kofun.toml"
-        option offline "--offline" bool "Refuse to fetch; resolve from the store alone"
+        option authority "--authority" text "Path to the explicit approved-origin authority file"
+        option store "--store" text "Path to the content-addressed store"
+        option out "--out" text "Where to write the lock" default "kofun.packages.lock"
+        action greet
+    }
+
+    command lock {
+        about "Resolve fetched metadata and the store without network access"
+        position MANIFEST "Path to kofun.toml"
+        option store "--store" text "Path to the content-addressed store"
         option out "--out" text "Where to write the lock" default "kofun.packages.lock"
         action greet
     }
 
     command verify {
-        about "Check every store entry against its own digest"
+        about "Check store integrity and every metadata/file entry named by a lock"
+        position LOCK "Path to kofun.packages.lock"
         position STORE "Path to the content-addressed store"
         option quiet "--quiet" bool "Report only failures"
         option format "--format" text "Report format" default "text"
@@ -70,7 +80,9 @@ cli Kpm {
         about "Explain a selection as the maximum it is"
         position MODULE "Module to explain"
         option all "--all" bool "Include bounds that did not decide the answer"
-        option manifest "--manifest" text "Path to kofun.toml" default "kofun.toml"
+        option manifest "--manifest" text "Path to kofun.toml"
+        option lock "--lock" text "Path to kofun.packages.lock"
+        option store "--store" text "Path to the content-addressed store"
         action greet
     }
 

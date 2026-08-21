@@ -29,8 +29,8 @@
 # ([ADR 1](../docs/adr/0001-minimal-version-selection.md)).
 
 [dependencies]
-"https://example.org/http" = ">= 1.4.0"
-"https://example.org/json/v2" = ">= 2.1.0"
+"https://example.org/http/" = ">= 1.4.0"
+"https://example.org/json/v2/" = ">= 2.1.0"
 
 # A workspace member is declared, not required. Its requirements join the set
 # and it is never fetched, so it carries no version — recording one would

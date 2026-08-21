@@ -484,12 +484,89 @@ for declaration in \
     'cli Kpm {' \
     '    name "kpm"' \
     '    command lock {' \
+    '    command fetch {' \
     '    command verify {' \
     '    command why {'
 do
     grep -Fq -- "$declaration" "$kcli" ||
         fail "the CLI contract lost a declaration: $declaration"
 done
+
+# Required data/authority inputs have no ambient default. Check the exact line
+# inside the exact command block: a repository-wide substring check would let
+# one command borrow another command's --store declaration, and a prefix check
+# would miss somebody appending a default.
+command_has_exact() {
+    command_name=$1
+    exact_declaration=$2
+    awk -v target="    command $command_name {" \
+        -v declaration="$exact_declaration" '
+        $0 == target { commands++; inside = 1; next }
+        inside && $0 == "    }" { inside = 0; next }
+        inside && $0 == declaration { found++ }
+        END { exit !(commands == 1 && found == 1) }
+    ' "$kcli" || fail "the $command_name command lost its exact required input: $exact_declaration"
+}
+
+command_has_exact fetch \
+    '        option authority "--authority" text "Path to the explicit approved-origin authority file"'
+command_has_exact fetch \
+    '        option store "--store" text "Path to the content-addressed store"'
+command_has_exact lock \
+    '        option store "--store" text "Path to the content-addressed store"'
+command_has_exact why \
+    '        option manifest "--manifest" text "Path to kofun.toml"'
+command_has_exact why \
+    '        option lock "--lock" text "Path to kofun.packages.lock"'
+command_has_exact why \
+    '        option store "--store" text "Path to the content-addressed store"'
+
+# Network authority is a command, not a mode. Fetch is the only declared
+# network operation, so lock cannot become online because somebody forgot a
+# flag. The contract itself has no --offline switch because offline is the
+# default and only behavior of every other command.
+sed 's/[[:space:]]*#.*$//' "$kcli" >"$WORK/kcli.decl"
+if grep -Fq -- '"--offline"' "$WORK/kcli.decl"; then
+    fail 'the CLI contract made offline behavior optional again'
+fi
+
+fetch_adr="$ROOT/docs/adr/0007-static-url-fetch-protocol.md"
+test -f "$fetch_adr" || fail 'the static URL fetch protocol ADR is missing'
+for decision in \
+    'P@kofun/v1/catalog' \
+    'P@kofun/v1/versions/<version>.meta' \
+    'P@kofun/v1/blobs/sha256/<64-lowercase-hex>' \
+    'kofun-fetch-authority/v1' \
+    'kofun-pm.lock/v2' \
+    'Only `kpm fetch` has network authority' \
+    'required version P@V is not published' \
+    'separate workspace-identity visited set' \
+    'There is no client-wide' \
+    'metadata\t<identity>\t<version>\t<size>\t<sha256>' \
+    'missing selected file' \
+    'kofun-pm.requirements/v2' \
+    'migration always requires explicit' \
+    '`Accept-Encoding: identity`' \
+    'approved public origins' \
+    'atomic create-if-absent semantics' \
+    'affine read handle' \
+    'Every later add, lookup, link/copy, or build handoff rehashes' \
+    'package identities in one closure, including workspace' \
+    'distinct identity/version pairs in one rough graph' \
+    'HTTP request/connection attempts in one fetch, including redirects and failures'
+do
+    grep -Fq -- "$decision" "$fetch_adr" ||
+        fail "the fetch contract lost a decision: $decision"
+done
+
+fetch_authority="$ROOT/contracts/fetch-authority.tsv"
+test -f "$fetch_authority" || fail 'the explicit fetch authority contract is missing'
+test "$(sed -n '1p' "$fetch_authority")" = 'kofun-fetch-authority/v1' ||
+    fail 'the fetch authority contract lost its format header'
+awk -F '\t' '
+    NR == 2 && $1 == "origin" && $2 == "https://example.org" { found = 1 }
+    END { exit !found }
+' "$fetch_authority" || fail 'the fetch authority contract lost its canonical origin row'
 
 # Ahead of the compiler, on purpose. If this ever builds, the binding this
 # repository is waiting for has landed and the contract should stop being a
@@ -812,3 +889,4 @@ printf 'pm: an entry is named by its content, so the same bytes are one entry: P
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'
 printf 'pm: corruption names the entry, the expected digest, and the actual one: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'
+printf 'pm: the static fetch contract pins metadata; only fetch has network authority: PASS\n'
