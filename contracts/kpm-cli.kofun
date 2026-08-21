@@ -47,7 +47,7 @@
 
 cli Kpm {
     name "kpm"
-    version "0.13.0"
+    version "0.14.0"
     about "Package manager for Kofun: minimal version selection, content-addressed store, no install scripts"
 
     command fetch {

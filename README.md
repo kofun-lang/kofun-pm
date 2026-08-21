@@ -344,8 +344,36 @@ redirects, the ADR response-header and pre-body `Content-Length` bounds, file
 blobs, graph/MVS construction, lock writing, and same-handle consumption remain
 outside it, so #14 remains open.
 
+v0.14.0 closes the next single-file edge from those already parsed bytes:
+
+```
+scripts/fetch-file-v1.sh acquire IDENTITY VERSION LOGICAL_PATH METADATA \
+  --catalog CATALOG \
+  --authority AUTHORITY \
+  --ipv4 A.B.C.D \
+  --ca-file CA_PEM \
+  --store ABSOLUTE_STORE
+```
+
+The same one supplied authority/catalog plan binds the supplied metadata to its
+exact catalog size and digest before strict parsing. The adapter then selects
+one exact source/data descriptor by logical path and derives the blob class,
+size, digest, origin, and identity-path target; none is caller-overridable.
+Child output is captured until the admitted object has been independently
+snapshotted and rehashed. Source bytes must additionally be valid UTF-8; data
+bytes are opaque. Warm objects skip transfer but not descriptor selection,
+store revalidation, or the source check.
+
+This is one metadata-selected blob acquisition, not dependency or selected-
+package traversal. It neither materializes a public file nor executes an
+executable or lifecycle-looking source, and the CAS entry remains read-only and
+non-executable. Catalog/metadata acquisition, authenticity/history, the
+complete DNS/redirect/header-bounded transport, graph/MVS construction, lock
+writing, and same-handle consumer handoff remain outside it, so #14 remains
+open.
+
 **What is not here yet:** producing a complete lock still needs manifest
-parsing, the lock v2 writer, live catalog/metadata/blob acquisition and its
+parsing, the lock v2 writer, complete catalog/metadata/blob traversal and its
 complete DNS/redirect/header-bounded transport, authentication, and fetch. For a supplied
 structurally valid v2 lock, the
 inspector proves that every metadata and selected-file object directly named
@@ -387,6 +415,9 @@ pinned endpoint and verified no-replace store admission; it does not derive or
 traverse a package protocol input. v0.13.0 derives one exact metadata request
 from one supplied approved catalog plan and parses the admitted object, but it
 still does not acquire the catalog or traverse dependencies and file blobs.
+v0.14.0 derives one exact blob request from one descriptor in one supplied,
+catalog-bound metadata document and revalidates source/data bytes without
+materializing or executing them; it still does not perform package traversal.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -527,6 +558,10 @@ though the qualification remains outside the public package-fetch boundary.
 v0.13.0 adds the descriptor-bound metadata wrapper and the factored private
 metadata-plan adapter. Their catalog-to-request derivation, success withholding,
 store resnapshot, or strict parse boundary therefore also moves that identity.
+v0.14.0 adds the metadata-selected file wrapper and its closed request
+validator. Its exact-path descriptor selection, derived blob request, outer
+store snapshot, source UTF-8 check, and data opacity therefore move the same
+identity as well.
 
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
@@ -584,8 +619,11 @@ closure and clean Kofun gitlink. v0.12.0 adds a pinned descriptor-known HTTPS
 response/store qualification without claiming catalog or package acquisition.
 v0.13.0 binds one supplied catalog descriptor to one derived metadata request,
 store resnapshot, and strict parse without claiming catalog acquisition or the
-package graph. P4 still has to connect those checks to the complete header-bounded
-DNS/redirect transport, authenticated acquisition, file blobs, the manifest, a
+package graph. v0.14.0 binds one exact descriptor in one such supplied metadata
+document to one derived source/data blob request, store resnapshot, and source
+UTF-8 check without materialization or traversal. P4 still has to connect those
+checks to the complete header-bounded DNS/redirect transport, authenticated
+catalog/metadata acquisition, the full selected-file graph, the manifest, a
 writer, and offline consumers before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.

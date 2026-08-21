@@ -451,6 +451,32 @@ and pre-body `Content-Length` bounds, dependency traversal, file-blob
 acquisition, lock writing, or same-handle consumption. It is therefore one
 metadata acquisition edge, not the complete transport or `kpm fetch`.
 
+#### Current supplied-metadata selected-blob acquisition
+
+The v0.14.0 shell checkpoint adds exactly one file edge after the v0.13.0
+boundary. `scripts/fetch-file-v1.sh` accepts one identity, version, logical
+path, and supplied metadata path plus the same authority/catalog, pinned IPv4,
+CA, and store inputs. It first obtains one authority-approved catalog plan and
+binds the supplied metadata bytes to that exact version descriptor. Only after
+strict metadata parsing does it select the one exact logical-path descriptor.
+
+The adapter derives class `blob`, origin, identity-path target
+`@kofun/v1/blobs/sha256/<digest>`, size, and digest. The caller cannot supply or
+override them. It captures child output, independently snapshots and rehashes
+the admitted CAS entry, requires source bytes to be valid UTF-8, and treats
+data bytes as opaque. A warm object still crosses selection, store snapshot,
+and source validation. Acquisition never materializes or executes the bytes;
+an executable or lifecycle-looking supplied source remains an immutable,
+non-executable CAS object.
+
+This begins with supplied authority, catalog, and metadata files and acquires
+only one explicitly requested path. It does not acquire or authenticate the
+catalog or metadata, traverse dependencies or selected packages, prove the
+complete selected-file graph, implement the normative DNS/redirect/header-
+bounded transport, write a lock, materialize public package paths, or provide
+the affine same-open-handle consumer boundary. It is one selected-blob edge,
+not completion of #14 or `kpm fetch`.
+
 ### 9. Store publication is verify, then create-if-absent
 
 Fetched bytes are streamed into a unique temporary on the final entry's
@@ -584,9 +610,11 @@ and a network-denied lock/verify/build after one successful fetch.
 
 Issue #20/v0.12.0 supplies only the pinned single-artifact qualification above.
 Issue #21/v0.13.0 binds one supplied catalog descriptor to one derived metadata
-request and strict parse. Neither discharges catalog acquisition/provenance,
-the complete DNS/redirect/header transport, transitive metadata/file graph,
-lock, recovery, or offline-consumer evidence in this list.
+request and strict parse. Issue #22/v0.14.0 binds one exact descriptor in that
+supplied metadata to one derived blob acquisition, outer store snapshot, and
+source/data validation. None discharges catalog/metadata acquisition or
+provenance, the complete DNS/redirect/header transport, transitive selected-
+file graph, lock, recovery, or offline-consumer evidence in this list.
 
 ## Current Kofun implementation boundary
 
