@@ -67,12 +67,16 @@ sha256_of() {
 }
 
 size_of() {
-    if stat -c %s -- "$1" >/dev/null 2>&1; then
-        stat -c %s -- "$1"
-    elif stat -f %z -- "$1" >/dev/null 2>&1; then
-        stat -f %z -- "$1"
+    size_input=$1
+    # GNU stat reserves the exact operand '-' for stdin even after '--'. A
+    # caller-supplied regular file named '-' must remain the cwd pathname.
+    test "$size_input" != - || size_input=./-
+    if stat -c %s -- "$size_input" >/dev/null 2>&1; then
+        stat -c %s -- "$size_input"
+    elif stat -f %z -- "$size_input" >/dev/null 2>&1; then
+        stat -f %z -- "$size_input"
     else
-        wc -c <"$1" | tr -d ' '
+        wc -c <"$size_input" | tr -d ' '
     fi
 }
 
@@ -200,7 +204,7 @@ copy_candidate() {
     # Do not write beyond an untrusted declared bound. The shell adapter is a
     # Linux gate; the native transport will enforce the same limit while
     # reading its byte stream rather than after filling a temporary.
-    head -c "$expected_size" "$input" >"$tmp" ||
+    head -c "$expected_size" <"$input" >"$tmp" ||
         fail "could not copy bounded candidate bytes from $input"
     input_size=$(size_of "$input")
     test "$input_size" = "$expected_size" ||
@@ -383,7 +387,7 @@ case "${1:-}" in
         tmp_dir=$(mktemp -d "$(dirname -- "$dest")/.kpm-incoming.XXXXXX") ||
             fail "could not create a private snapshot directory beside $dest"
         tmp=$tmp_dir/artifact
-        head -c "$((bytes + 1))" "$source" >"$tmp" ||
+        head -c "$((bytes + 1))" <"$source" >"$tmp" ||
             fail "could not copy the bounded store snapshot: $digest"
         snapshot_size=$(size_of "$tmp")
         test "$snapshot_size" = "$bytes" ||

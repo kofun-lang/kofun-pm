@@ -11,6 +11,10 @@ BEGIN {
     max_files = 4096
     max_file_size = 67108864
     max_package_file_size = 536870912
+    if (expected_identity_environment != "")
+        expected_identity = ENVIRON[expected_identity_environment]
+    if (expected_version_environment != "")
+        expected_version = ENVIRON[expected_version_environment]
 }
 
 function reject(message) {
@@ -37,7 +41,7 @@ NR == 2 {
     document_identity = $2
     identity(document_identity, "metadata identity")
     if (document_identity != expected_identity)
-        reject("identity does not match its lock row: " document_identity)
+        reject("identity does not match its expected descriptor: " document_identity)
     identity_seen = 1
     next
 }
@@ -50,7 +54,7 @@ NR == 3 {
     document_version = $2
     identity_version(document_identity, document_version, "metadata")
     if (document_version != expected_version)
-        reject("version does not match its lock row: " document_version)
+        reject("version does not match its expected descriptor: " document_version)
     version_seen = 1
     next
 }

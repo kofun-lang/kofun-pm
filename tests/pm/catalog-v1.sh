@@ -441,7 +441,7 @@ cp "$WORK/catalog" "$WORK/catalog.before-swap"
 cp "$WORK/changed-digest.catalog" "$WORK/catalog.swap"
 {
     printf '#!/bin/sh\nset -eu\n'
-    printf 'input=\nfor argument do input=$argument; done\n'
+    printf 'input=$(readlink "/proc/$$/fd/0" 2>/dev/null || :)\n'
     printf '"%s" "$@"\nstatus=$?\n' "$real_head"
     printf 'if test "$input" = "$KPM_SWAP_TARGET"; then\n'
     printf '  count=0\n  test ! -f "$KPM_SWAP_COUNT" || read -r count <"$KPM_SWAP_COUNT"\n'

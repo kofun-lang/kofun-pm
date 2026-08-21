@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 LOCK_TOOL=$ROOT/scripts/lock-v2.sh
+LOCK_STRUCTURE_TOOL=$ROOT/scripts/lock-v2-structure.sh
 STORE_TOOL=$ROOT/scripts/store.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/kofun-pm-lock-v2-test.XXXXXX")
 trap 'rm -rf "$WORK"' 0 1 2 15
@@ -193,6 +194,18 @@ body=$WORK/body
 lock=$WORK/kofun.packages.lock
 write_lock "$body" "$lock"
 
+# A regular lock named '-' is a pathname, not an instruction for head to read
+# hostile ambient stdin.
+mkdir -p "$WORK/option-lock"
+cp "$lock" "$WORK/option-lock/-"
+if ! (cd "$WORK/option-lock" && sh "$LOCK_STRUCTURE_TOOL" inspect - \
+    </dev/null) >"$WORK/option-lock.out" 2>&1
+then
+    fail "lock pathname '-' was replaced by stdin: $(cat "$WORK/option-lock.out")"
+fi
+grep -Fq "metadata$(printf '\t')" "$WORK/option-lock.out" ||
+    fail "lock pathname '-' did not produce its normalized plan"
+
 # A content-addressed store is not an exact projection of one lock. A valid
 # object left by another project or fetch is allowed by the global direction.
 printf 'valid unreferenced bytes\n' >"$WORK/objects/unreferenced"
@@ -316,12 +329,12 @@ expect_metadata_refusal 'metadata header' 'first line is not exactly kofun-metad
 
 sed '2s#https://example\.org/a/#https://example.org/other/#' \
     "$WORK/objects/meta-a-selected" >"$WORK/metadata-wrong-identity"
-expect_metadata_refusal 'metadata identity binding' 'identity does not match its lock row' \
+expect_metadata_refusal 'metadata identity binding' 'identity does not match its expected descriptor' \
     "$WORK/metadata-wrong-identity"
 
 sed '3s/1\.2\.0/1.3.0/' "$WORK/objects/meta-a-selected" \
     >"$WORK/metadata-wrong-version"
-expect_metadata_refusal 'metadata version binding' 'version does not match its lock row' \
+expect_metadata_refusal 'metadata version binding' 'version does not match its expected descriptor' \
     "$WORK/metadata-wrong-version"
 
 awk 'NR == 1 { printf "%s\r\n", $0; next } { print }' \

@@ -857,6 +857,14 @@ digest_a=$(env -i PATH="$PATH" sh "$store_tool" --store "$STORE" \
 digest_b=$(store add "$WORK/src/b" 2>"$WORK/store.add-b")
 digest_again=$(store add "$WORK/src/a-renamed" 2>"$WORK/store.add-again")
 
+mkdir -p "$WORK/option-input"
+cp "$WORK/src/a" "$WORK/option-input/-"
+digest_option=$(cd "$WORK/option-input" && \
+    sh "$store_tool" --store "$STORE" add - <"$WORK/src/b" \
+    2>"$WORK/store.add-option") || fail "the store could not read pathname '-'"
+test "$digest_option" = "$digest_a" ||
+    fail "the store replaced pathname '-' with ambient stdin"
+
 test "$digest_a" = "$digest_again" ||
     fail "the same bytes under another name produced a different digest:
   $digest_a and $digest_again"
@@ -1205,6 +1213,7 @@ store verify >"$WORK/store.final" 2>&1 ||
 
 sh "$ROOT/tests/pm/lock-v2.sh"
 sh "$ROOT/tests/pm/catalog-v1.sh"
+sh "$ROOT/tests/pm/metadata-v1.sh"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'

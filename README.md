@@ -236,6 +236,22 @@ violation; a catalog row not represented in that one lock is allowed. Without
 a matching lock row, success is named first observation rather than history.
 The action remains offline and read-only under hostile proxy and home state.
 
+v0.9.0 closes the next supplied-byte integrity edge for one exact version:
+
+```
+scripts/metadata-v1.sh inspect IDENTITY VERSION METADATA \
+  --catalog CATALOG --authority AUTHORITY
+```
+
+The authority and catalog pass through the same bounded read-once plan adapter
+used by v0.8.0. An exact catalog row is required — a higher version is never a
+substitute — before the metadata pathname is opened. The private metadata
+snapshot must then match its catalog byte size before SHA-256 is computed, and
+match that digest before strict identity, version, dependency, file, order,
+path, kind, and scalar parsing begins. Size and digest failures therefore
+cannot be disguised as grammar failures. This still consumes supplied bytes;
+it neither fetches nor authenticates them.
+
 **What is not here yet:** a *complete* lock that enumerates every required
 rough-graph input still needs the lock v2 writer, live catalog/metadata/blob
 acquisition and authentication, graph binding, and fetch. For a supplied
@@ -267,7 +283,9 @@ fetch, the lock v2 writer, dependency-closure/re-resolution binding, and offline
 build evidence remain, so #14 stays open. The v0.8.0 catalog checkpoint covers
 only supplied policy/catalog bytes and descriptors retained by one supplied
 lock: it does not prove that bytes came from that HTTPS origin, authenticate a
-publisher, prevent equivocation, or retain a complete catalog ledger.
+publisher, prevent equivocation, or retain a complete catalog ledger. v0.9.0
+binds one supplied metadata document to one exact catalog descriptor but does
+not acquire it or inspect the file blobs it describes.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -378,6 +396,14 @@ states first observation when the supplied lock carries no matching remote
 descriptor. It does not read store objects or claim a complete historical
 catalog.
 
+v0.9.0 factors the authority/catalog snapshot and parser path into a shared
+normalized plan adapter, then adds `scripts/metadata-v1.sh`. For one requested
+identity/version, the action requires exact catalog membership and validates a
+single supplied metadata snapshot in size, digest, then strict grammar order.
+It reports complete dependency/file descriptor counts only after parsing the
+whole document and never opens a metadata path for an unapproved origin,
+malformed catalog, or absent exact version.
+
 The two store actions intentionally do **not** prove catalog authenticity/history,
 dependency reachability or the complete rough graph, recompute the tool or
 requirements identity, re-resolve MVS, write a lock, migrate v1, fetch, prove
@@ -423,9 +449,11 @@ descriptor bijection, and sequential integrity of every lock-named store
 snapshot. v0.7.0 composes that with a subsequent reverse scan of the explicit
 store, while allowing valid unreferenced objects. v0.8.0 separately validates
 one supplied authority/catalog pair and the continuity of descriptors actually
-retained by one supplied lock. P4 still has to connect those checks to live
-authenticated acquisition, a complete rough graph, the manifest, a writer,
-and offline re-resolution before making the complete v2 claim.
+retained by one supplied lock. v0.9.0 binds one supplied metadata document to
+its exact catalog size/digest before strict parsing. P4 still has to connect
+those checks to live authenticated acquisition, file blobs, a complete rough
+graph, the manifest, a writer, and offline re-resolution before making the
+complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

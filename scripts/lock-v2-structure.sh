@@ -55,7 +55,7 @@ trap 'rm -rf "$work"' 0 1 2 15
 # distinguishes an input exactly at the limit from an overrun without first
 # consuming an unbounded pathname stream.
 LOCK=$work/lock.snapshot
-head -c $((MAX_LOCK_BYTES + 1)) "$INPUT_LOCK" >"$LOCK" ||
+head -c "$((MAX_LOCK_BYTES + 1))" <"$INPUT_LOCK" >"$LOCK" ||
     fail "could not read the lock snapshot: $INPUT_LOCK"
 lock_bytes=$(wc -c <"$LOCK" | tr -d ' ')
 test "$lock_bytes" -le "$MAX_LOCK_BYTES" ||
