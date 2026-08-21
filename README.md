@@ -234,7 +234,7 @@ derivations, which is a later and harder decision, named in
 ```
 # format: kofun-pm.lock/v1
 # columns: module selection value
-# tool: 3135b50
+# tool: 6d4f0d92…
 # requirements: a0fd5e88…
 10	selected	6
 20	workspace	-
@@ -247,16 +247,20 @@ function. Re-resolving the same requirements must give the same answer, so
 `kpm verify` is a check rather than a hope. A lock over a *search* cannot make
 that claim, which is why locks over searches pin outputs only.
 
-That buys three failures where other tools have one, and "the lock is wrong"
-sends a reader nowhere:
+That buys four failures where other tools have one, and "the lock is wrong"
+sends a reader nowhere. The tool identity is the SHA-256 of a domain-framed
+closure: resolver core and shell, build wiring, lock tool, and the exact Kofun
+toolchain gitlink. It is not the repository commit, so an unrelated change
+does not make every project re-lock:
 
 | what happened | what the lock says | what to do |
 |---|---|---|
 | someone edited the file | its own digest no longer covers its contents | restore it |
 | the requirements changed | written against a different requirement set | re-lock |
-| same requirements, different answer | the tool changed its answer | file a bug |
+| the resolver inputs changed | tool identity no longer matches | review the resolver change, then re-lock |
+| same requirements and resolver, different answer | the same tool changed its answer | file a bug |
 
-The third **cannot happen** while the rule is a maximum. It is checked anyway,
+The fourth **cannot happen** while the rule is a maximum. It is checked anyway,
 because "cannot happen" is the state every silent corruption was in first.
 
 The digest covers the headers as well as the rows, deliberately: a digest over

@@ -15,14 +15,15 @@ set -eu
 # it can never mean the solver felt different today. A lock over a search could
 # not make that claim, which is why locks over searches pin outputs only.
 #
-# Three failures, and each is a different thing to do about it:
+# Four failures, and each is a different thing to do about it:
 #
 #   the file was edited          its own digest no longer covers its body
 #   the requirements changed     the lock is stale; re-lock
-#   the resolution changed       same requirements, different answer — the
-#                                tool changed, and that is a bug report
+#   the resolver inputs changed  review that change, then re-lock
+#   the resolution changed       same requirements and resolver inputs,
+#                                different answer — that is a bug report
 #
-# The third cannot happen while the rule is a maximum. It is checked anyway,
+# The fourth cannot happen while the rule is a maximum. It is checked anyway,
 # because "cannot happen" is the state every silent corruption was in first.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -45,8 +46,40 @@ sha256() {
     fi
 }
 
-tool_version() {
-    git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unknown'
+tool_identity() {
+    vendor=$ROOT/vendor/kofun
+    vendor_gitlink=$(
+        git -C "$ROOT" ls-files --stage -- vendor/kofun |
+            awk '$1 == 160000 { print $2 }'
+    )
+    test -n "$vendor_gitlink" ||
+        fail 'vendor/kofun is not recorded as a gitlink'
+    vendor_head=$(git -C "$vendor" rev-parse HEAD 2>/dev/null) ||
+        fail 'vendor/kofun is not a checked-out Git repository'
+    test "$vendor_head" = "$vendor_gitlink" ||
+        fail "vendor/kofun does not match the recorded gitlink;
+  gitlink $vendor_gitlink
+  checkout $vendor_head"
+    git -C "$vendor" diff --quiet HEAD -- ||
+        fail 'vendor/kofun has tracked changes; its tool identity is not immutable'
+
+    framing=$({
+        printf '%s\n' 'kofun-pm.lock-tool/v1'
+        for relative in \
+            seed/resolver/core.kofun \
+            seed/resolver/shell.kofun \
+            scripts/build-seed.sh \
+            scripts/lock.sh
+        do
+            input=$ROOT/$relative
+            test -f "$input" || fail "tool input is missing: $relative"
+            bytes=$(wc -c <"$input" | tr -d ' ')
+            digest=$(sha256 <"$input")
+            printf 'file\t%s\t%s\t%s\n' "$relative" "$bytes" "$digest"
+        done
+        printf 'gitlink\tvendor/kofun\t%s\n' "$vendor_gitlink"
+    }) || return
+    printf '%s\n' "$framing" | sha256
 }
 
 # The requirement set, as the resolver compiled it.
@@ -100,6 +133,10 @@ case "${1:-}" in
         work=$(mktemp -d "${TMPDIR:-/tmp}/kofun-pm-lock.XXXXXX")
         trap 'rm -rf "$work"' 0 1 2 15
 
+        written_tool=$(tool_identity) ||
+            fail 'could not identify the resolver/tool input closure'
+        written_requirements=$(requirements_digest) ||
+            fail 'could not digest the requirement set'
         lock_rows >"$work/rows" ||
             fail 'the resolver produced no lock block'
         render_rows <"$work/rows" >"$work/body" ||
@@ -109,8 +146,8 @@ case "${1:-}" in
         {
             printf '# format: %s\n' "$FORMAT"
             printf '# columns: %s\n' "$COLUMNS"
-            printf '# tool: %s\n' "$(tool_version)"
-            printf '# requirements: %s\n' "$(requirements_digest)"
+            printf '# tool: %s\n' "$written_tool"
+            printf '# requirements: %s\n' "$written_requirements"
             cat "$work/body"
         } >"$work/covered"
 
@@ -160,9 +197,21 @@ case "${1:-}" in
   requirements $current_requirements
   re-lock: scripts/lock.sh write"
 
-        # 3. The resolution itself. Same requirements, so the same answer —
-        #    unless the tool changed. Under a solver this check would be noise;
-        #    under a maximum it is a bug report.
+        # 3. Which resolver/tool input closure made the decision. This is
+        #    deliberately a digest of the fixed, domain-framed inputs rather
+        #    than the repository HEAD: unrelated changes must not make every
+        #    project re-lock.
+        recorded_tool=$(sed -n 's/^# tool: //p' "$lock" | head -1)
+        current_tool=$(tool_identity)
+        test "$recorded_tool" = "$current_tool" ||
+            fail "the resolver tool identity changed;
+  lock says $recorded_tool
+  resolver  $current_tool
+  review the resolver change, then re-lock: scripts/lock.sh write"
+
+        # 4. The resolution itself. Same requirements and resolver inputs, so
+        #    the same answer. A compiler or execution change that alters it is
+        #    a bug report, not an ordinary stale lock.
         lock_rows >"$work/rows" || fail 'the resolver produced no lock block'
         render_rows <"$work/rows" >"$work/body" ||
             fail 'a module in the closure did not resolve'
@@ -172,8 +221,9 @@ case "${1:-}" in
             printf '  columns:  %s\n' "$COLUMNS" >&2
             diff "$work/recorded" "$work/body" |
                 sed 's/^/  /' >&2 || true
-            printf '  the requirement digest matched, so this is the tool\n' >&2
-            printf '  changing its answer — which minimal version selection\n' >&2
+            printf '  the requirement and resolver digests matched, so this\n' >&2
+            printf '  is the same tool changing its answer — which minimal\n' >&2
+            printf '  version selection\n' >&2
             printf '  cannot do while the rule is a maximum. This is a bug.\n' >&2
             exit 1
         fi

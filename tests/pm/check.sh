@@ -537,9 +537,10 @@ printf 'pm: a member joins the requirement set and is never fetched: PASS\n'
 # worth doing because MVS is a function: re-resolving the same requirements
 # must give the same answer, so verifying is a check rather than a hope.
 #
-# Three failures, and the whole value is that they are three rather than one.
-# "The lock is wrong" sends a reader nowhere; "you edited it", "it is stale"
-# and "the tool changed its answer" each say what to do next.
+# Four failures, and the whole value is that they are separate rather than one.
+# "The lock is wrong" sends a reader nowhere; "you edited it", "it is stale",
+# "the resolver changed", and "the same resolver changed its answer" each say
+# what to do next.
 
 lock_tool="$ROOT/scripts/lock.sh"
 test -x "$lock_tool" || fail 'the lock tool is missing'
@@ -576,7 +577,7 @@ if grep -E '^[0-9]+	workspace	' "$committed_lock" | grep -qvE '	-$'; then
     fail 'a workspace member was locked with a version; a lock must not pin a local path'
 fi
 
-# --- the three refusals, each by name
+# --- the four refusals, each by name
 
 re_sign() {
     # Rebuild a lock's digest over its edited contents, so the result is
@@ -631,6 +632,23 @@ if grep -Fq 'edited by hand' "$WORK/stale.log"; then
     fail 'a stale lock was reported as a hand edit; the two want opposite responses'
 fi
 
+# A different resolver/tool input identity. It is internally consistent and
+# its requirements still match, so this must not collapse into tampering or
+# stale input. Repository HEAD is intentionally not used: unrelated commits
+# must not force every project to re-lock.
+sed 's/^# tool: .*/# tool: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' \
+    "$committed_lock" >"$WORK/tool-changed.pre"
+re_sign "$WORK/tool-changed.pre" "$WORK/tool-changed.lock"
+expect_refusal 'a different resolver tool identity was not refused' \
+    "$WORK/tool-changed.lock" "the resolver tool identity changed"
+sh "$lock_tool" verify "$WORK/tool-changed.lock" >"$WORK/tool-changed.log" 2>&1 || true
+if grep -Eq 'edited by hand|different requirement set' "$WORK/tool-changed.log"; then
+    fail 'a resolver change was confused with tampering or stale requirements'
+fi
+
+grep -Eq '^# tool: [0-9a-f]{64}$' "$committed_lock" ||
+    fail 'the lock tool identity is not a SHA-256 digest'
+
 # --- the manifest surface
 #
 # The declared shape of a `[dependencies]` section: an identity and a lower
@@ -679,7 +697,7 @@ fi
 
 printf 'pm: a dependency is an identity and a lower bound, and the absences are asserted: PASS\n'
 printf 'pm: the lock pins the resolution, and re-locking is idempotent: PASS\n'
-printf 'pm: edited, stale, and drifted locks are three refusals, not one: PASS\n'
+printf 'pm: edited, stale, resolver-changed, and drifted locks are four refusals: PASS\n'
 printf 'pm: a workspace member is locked as a member, never as a version: PASS\n'
 
 # ============================================================= the store
