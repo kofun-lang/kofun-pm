@@ -1288,6 +1288,7 @@ sh "$ROOT/tests/pm/fetch-file-v1.sh"
 sh "$ROOT/tests/pm/fetch-version-v1.sh"
 sh "$ROOT/tests/pm/lock-tool-v2.sh"
 sh "$ROOT/tests/pm/rough-graph-v2.sh"
+sh "$ROOT/tests/pm/selected-files-v2-plan.sh"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'

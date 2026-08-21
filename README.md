@@ -401,6 +401,32 @@ transport, graph traversal, manifest binding, the lock writer, same-handle
 consumer handoff, and the global lifecycle proof remain outside it, so #14
 remains open.
 
+v0.16.0 derives the selected-file candidate plan before those file objects
+exist:
+
+```
+scripts/selected-files-v2-plan.sh inspect REQUIREMENTS LOCK \
+  --store ABSOLUTE_STORE
+```
+
+One supplied canonical requirements-v2 document and strict candidate lock v2
+are bound to the current tool closure. Every retained selected or visited
+metadata object must already be in the supplied store and passes its independent
+snapshot, strict parse, aggregate bounds, and selected-descriptor/lock-file
+bijection. The existing rough-graph validator then reproves workspace exclusion,
+exact-pair reachability, cycles, raw edges, and semantic MVS. Only after all of
+that succeeds does the adapter expose the lock self/tool/requirements digests,
+every retained metadata descriptor, exactly the final-selected file descriptors,
+and complete counts.
+
+The planned file CAS objects are deliberately not opened. Their absence,
+corruption, writability, symlink/FIFO state, or source bytes cannot change the
+byte-identical plan, while the existing lock inspectors and `graph-plan` still
+require every selected file object. This is a prefetch candidate derived from
+supplied lock and metadata, not network authorization or authenticated graph
+construction. It does not acquire catalogs/metadata/files, validate source
+bytes, write a lock, materialize/build, or close any #14 end-to-end criterion.
+
 **What is not here yet:** producing a complete lock still needs manifest
 parsing, the lock v2 writer, complete catalog/metadata/blob traversal and its
 complete DNS/redirect/header-bounded transport, authentication, and fetch. For a supplied
@@ -449,7 +475,10 @@ catalog-bound metadata document and revalidates source/data bytes without
 materializing or executing them. v0.15.0 instead acquires the catalog-bound
 metadata and every descriptor it declares for one exact version, with one
 complete-file-set success barrier; it still does not select or traverse the
-dependency/package graph.
+dependency/package graph. v0.16.0 separates the metadata-proven rough-graph/MVS
+selected-file candidate plan from file CAS validation, so a later fetch can
+target selected versions without mistakenly fetching visited-version files;
+the lock and retained metadata remain supplied and unauthenticated.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -596,7 +625,9 @@ store snapshot, source UTF-8 check, and data opacity therefore move the same
 identity as well. v0.15.0 adds the exact-version wrapper and its private shared
 object edge. Complete descriptor preflight, metadata-plus-all-file ordering,
 per-object outer snapshots, and the one version-level success barrier therefore
-move that identity too.
+move that identity too. v0.16.0 adds the prefetch graph mode and selected-file
+plan adapter; their metadata-only store boundary, graph/MVS revalidation,
+canonical inventory, and all-or-nothing plan output move the identity too.
 
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
@@ -658,10 +689,13 @@ package graph. v0.14.0 binds one exact descriptor in one such supplied metadata
 document to one derived source/data blob request, store resnapshot, and source
 UTF-8 check without materialization or traversal. v0.15.0 acquires that exact
 catalog-bound metadata and its complete bounded file set, but only for one
-caller-selected version. P4 still has to connect those checks to the complete
-header-bounded DNS/redirect transport, authenticated catalog acquisition, the
-selected dependency/package graph, the manifest, a writer, and offline
-consumers before making the complete v2 claim.
+caller-selected version. v0.16.0 derives the exact final-selected file candidate
+inventory from one supplied requirements/lock/metadata checkpoint without
+requiring those file objects, but does not authenticate or write that lock.
+P4 still has to connect those checks to the complete header-bounded
+DNS/redirect transport, authenticated catalog acquisition and graph
+construction, the manifest, a writer, and offline consumers before making the
+complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

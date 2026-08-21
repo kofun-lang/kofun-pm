@@ -140,6 +140,7 @@ write_expected_manifest() {
         printf 'scripts/requirements-v2-validate.awk\n'
         printf 'scripts/rough-graph-v2-validate.awk\n'
         printf 'scripts/rough-graph-v2.sh\n'
+        printf 'scripts/selected-files-v2-plan.sh\n'
         printf 'scripts/store.sh\n'
         printf 'seed/resolver/core.kofun\n'
         printf 'seed/resolver/shell.kofun\n'

@@ -8,6 +8,8 @@ set -eu
 #   scripts/lock-v2.sh audit-store LOCK --store /abs/path
 #   scripts/lock-v2.sh graph-plan LOCK --store /abs/path \
 #     --requirements-digest DIGEST
+#   scripts/lock-v2.sh graph-prefetch-plan LOCK --store /abs/path \
+#     --requirements-digest DIGEST
 #
 # Neither public action is named plain `verify`: catalog/history binding,
 # dependency reachability and re-resolution, tool/requirements identity, and
@@ -17,7 +19,10 @@ set -eu
 # under the complete command name. `graph-plan` is an internal composition
 # adapter: it also binds the supplied requirements and current local tool
 # closure, withholds machine rows until the full lock-scoped inspection passes,
-# and is consumed only by rough-graph-v2.sh.
+# and is consumed only by rough-graph-v2.sh. `graph-prefetch-plan` is an
+# internal acquisition-planning variant: it preserves all of those checks
+# through the selected metadata/file descriptor bijection but deliberately
+# does not require the selected file objects that its caller intends to fetch.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STORE_TOOL=$ROOT/scripts/store.sh
@@ -42,16 +47,16 @@ case $ACTION in
             fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE'
         EXPECTED_REQUIREMENTS=
         ;;
-    graph-plan)
+    graph-plan | graph-prefetch-plan)
         test "$#" -eq 6 && test "${3:-}" = --store &&
             test "${5:-}" = --requirements-digest ||
-            fail 'usage: scripts/lock-v2.sh graph-plan LOCK --store ABSOLUTE_STORE --requirements-digest DIGEST'
+            fail 'usage: scripts/lock-v2.sh {graph-plan|graph-prefetch-plan} LOCK --store ABSOLUTE_STORE --requirements-digest DIGEST'
         EXPECTED_REQUIREMENTS=${6:-}
         case $EXPECTED_REQUIREMENTS in
-            *[!0-9a-f]* | '') fail 'graph-plan requirements digest is not one lowercase sha256 digest' ;;
+            *[!0-9a-f]* | '') fail "$ACTION requirements digest is not one lowercase sha256 digest" ;;
         esac
         test "${#EXPECTED_REQUIREMENTS}" -eq 64 ||
-            fail 'graph-plan requirements digest is not one lowercase sha256 digest'
+            fail "$ACTION requirements digest is not one lowercase sha256 digest"
         ;;
     *) fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE' ;;
 esac
@@ -85,7 +90,7 @@ trap 'rm -rf "$work"' 0 1 2 15
 sh "$STRUCTURE_TOOL" inspect "$INPUT_LOCK" >"$work/objects"
 
 tab=$(printf '\t')
-if test "$ACTION" = graph-plan; then
+if test "$ACTION" = graph-plan || test "$ACTION" = graph-prefetch-plan; then
     lock_requirements=$(LC_ALL=C awk -F "$tab" '$1 == "lock" { print $6 }' \
         "$work/objects")
     test -n "$lock_requirements" || fail 'lock plan did not retain its requirements digest'
@@ -233,6 +238,17 @@ if ! cmp -s "$work/metadata-files" "$work/lock-files"; then
     LC_ALL=C diff -u "$work/metadata-files" "$work/lock-files" 2>/dev/null |
         head -n 12 | sed 's/^/  /' >&2 || :
     exit 1
+fi
+
+# Acquisition planning has now proven every retained metadata object and the
+# exact selected-descriptor relation. It may expose the normalized graph and
+# file descriptors without circularly requiring those planned file objects.
+# The existing public inspectors and graph-plan continue through pass two.
+if test "$ACTION" = graph-prefetch-plan; then
+    LC_ALL=C awk -F "$tab" '$1 == "file" { print }' "$work/objects" \
+        >>"$work/graph-plan"
+    cat "$work/graph-plan"
+    exit 0
 fi
 
 # Pass two consumes only lock rows already proven byte-identical to selected

@@ -27,6 +27,7 @@ scripts/requirements-v2-plan.sh
 scripts/requirements-v2-validate.awk
 scripts/rough-graph-v2-validate.awk
 scripts/rough-graph-v2.sh
+scripts/selected-files-v2-plan.sh
 scripts/store.sh
 seed/resolver/core.kofun
 seed/resolver/shell.kofun

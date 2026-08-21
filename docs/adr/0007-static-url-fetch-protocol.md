@@ -503,6 +503,34 @@ write or migrate a lock, materialize files, prove offline build behavior, or
 provide the affine same-open-handle boundary. It advances but does not complete
 #14 or `kpm fetch`.
 
+#### Current supplied-lock selected-file candidate plan
+
+The v0.16.0 shell checkpoint separates acquisition planning from the selected
+file objects that the plan names. `scripts/selected-files-v2-plan.sh` accepts
+one supplied canonical requirements-v2 document, strict candidate lock v2, and
+explicit store. A private `graph-prefetch-plan` path retains the existing lock
+framing/self-digest, requirements digest, current tool-closure, all retained
+metadata snapshot/parse/bound, and selected descriptor/file-row bijection
+checks, but stops before selected-file CAS snapshots.
+
+The existing rough-graph validator then independently proves workspace
+equality and exclusion, exact reachable metadata pairs, cycles, raw-edge and
+identity bounds, and the semantic MVS maxima. No machine row escapes before
+that succeeds. The complete output binds the lock self/tool/requirements
+digests and lists every selected or visited metadata descriptor plus exactly
+the final-selected file descriptors in canonical lock order. The legacy lock
+inspectors and `graph-plan` retain their selected-file snapshot and source
+validation behavior.
+
+This is a prefetch candidate plan, not network authority. The supplied lock is
+not writer-proven or authenticated through current catalog state, and all
+retained metadata must already be present. File absence, corruption, special
+objects, or source bytes are deliberately planning-inert. This action does not
+acquire catalogs, metadata, or files; validate source bytes; recover or
+materialize objects; parse a manifest; write/migrate/replace a lock; implement
+transport; build; or provide same-open-handle/native behavior. It does not
+complete #14.
+
 ### 9. Store publication is verify, then create-if-absent
 
 Fetched bytes are streamed into a unique temporary on the final entry's
@@ -640,9 +668,11 @@ request and strict parse. Issue #22/v0.14.0 binds one exact descriptor in that
 supplied metadata to one derived blob acquisition, outer store snapshot, and
 source/data validation. Issue #23/v0.15.0 acquires the catalog-bound metadata
 and every descriptor it declares for one exact version, with one all-files
-success barrier. None discharges catalog acquisition/provenance, the complete
-DNS/redirect/header transport, transitive selected-package graph, lock,
-recovery, or offline-consumer evidence in this list.
+success barrier. Issue #24/v0.16.0 derives the final-selected file candidate
+inventory from supplied requirements/lock/retained metadata without requiring
+the planned file CAS objects. None discharges catalog acquisition/provenance,
+the complete DNS/redirect/header transport, authenticated transitive graph,
+lock writing, recovery, or offline-consumer evidence in this list.
 
 ## Current Kofun implementation boundary
 

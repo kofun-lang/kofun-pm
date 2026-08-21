@@ -300,7 +300,12 @@ printf 'wrong\n' >"$WORK/pre-tool-bad.lock"
 expect_pre_tool_refusal 'malformed lock before tool identity' \
     "first header is not '# format: kofun-pm.lock/v2'" \
     "$WORK/requirements" "$WORK/pre-tool-bad.lock" "$STORE"
-sed 's/^# tool: ./# tool: f/' "$WORK/lock" >"$WORK/pre-tool-self.lock"
+case $TOOL_DIGEST in
+    0*) pre_tool_wrong_digest=f${TOOL_DIGEST#?} ;;
+    *) pre_tool_wrong_digest=0${TOOL_DIGEST#?} ;;
+esac
+sed "s/^# tool: $TOOL_DIGEST/# tool: $pre_tool_wrong_digest/" \
+    "$WORK/lock" >"$WORK/pre-tool-self.lock"
 expect_pre_tool_refusal 'lock self-digest before tool identity' \
     'lock digest does not cover its preceding bytes' \
     "$WORK/requirements" "$WORK/pre-tool-self.lock" "$STORE"
