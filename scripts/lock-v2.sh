@@ -5,20 +5,25 @@ set -eu
 #
 #   scripts/lock-v2.sh inspect LOCK --store /abs/path
 #
-# This is deliberately not named plain `verify`: metadata parsing, the
-# selected-file descriptor bijection, rough-graph re-resolution, and the v2
-# writer/migration path are later slices. A partial verifier must say which
-# boundary it proves instead of returning success under the complete command
-# name.
+# This is deliberately not named plain `verify`: catalog/history binding,
+# dependency reachability and re-resolution, tool/requirements identity, and
+# the v2 writer/migration/fetch path are later slices. A partial verifier must
+# say which boundary it proves instead of returning success under the complete
+# command name.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STORE_TOOL=$ROOT/scripts/store.sh
+PROTOCOL_VALIDATOR=$ROOT/scripts/protocol-v1-validate.awk
 VALIDATOR=$ROOT/scripts/lock-v2-validate.awk
+METADATA_VALIDATOR=$ROOT/scripts/metadata-v1-validate.awk
 FORMAT='kofun-pm.lock/v2'
 COLUMNS='typed rows: package identity state version | metadata identity version size sha256 | file identity version path kind size sha256'
 MAX_LOCK_BYTES=268435456
 MAX_BODY_ROWS=82944
 MAX_LINE_BYTES=4096
+MAX_METADATA_ROWS=4355
+MAX_REMOTE_DEPENDENCY_EDGES=16384
+MAX_METADATA_FILE_DESCRIPTORS=65536
 
 fail() {
     printf 'lock-v2: %s\n' "$*" >&2
@@ -61,7 +66,11 @@ test "$STORE" != / || fail '--store refuses the filesystem root'
 test -d "$STORE" || fail "no store at $STORE"
 
 test -x "$STORE_TOOL" || fail "store adapter is missing: $STORE_TOOL"
+test -f "$PROTOCOL_VALIDATOR" ||
+    fail "shared protocol validator is missing: $PROTOCOL_VALIDATOR"
 test -f "$VALIDATOR" || fail "lock-v2 validator is missing: $VALIDATOR"
+test -f "$METADATA_VALIDATOR" ||
+    fail "metadata validator is missing: $METADATA_VALIDATOR"
 test ! -L "$INPUT_LOCK" && test -f "$INPUT_LOCK" ||
     fail "lock is not a regular non-symlink file: $INPUT_LOCK"
 
@@ -128,43 +137,147 @@ sed '1,4d;$d' "$LOCK" >"$work/body"
 body_rows=$(wc -l <"$work/body" | tr -d ' ')
 test "$body_rows" -le "$MAX_BODY_ROWS" ||
     fail "lock body exceeds the $MAX_BODY_ROWS-row structural bound: $body_rows"
-LC_ALL=C awk -f "$VALIDATOR" "$work/body" >"$work/objects" ||
+LC_ALL=C awk -f "$PROTOCOL_VALIDATOR" -f "$VALIDATOR" "$work/body" \
+    >"$work/objects" ||
     fail 'the lock-v2 envelope is invalid'
 
 tab=$(printf '\t')
 objects=0
 metadata_objects=0
 file_objects=0
-while IFS="$tab" read -r object identity version path kind size digest; do
+metadata_dependency_edges=0
+metadata_file_descriptors=0
+: >"$work/lock-files"
+: >"$work/metadata-files"
+
+# Pass one parses every metadata snapshot, including superseded versions, and
+# builds both sides of the selected descriptor relation. No snapshot or
+# validation is initiated from a file row until that relation is proven.
+while IFS="$tab" read -r object identity version path kind size digest selection; do
     test -n "$object" || continue
     objects=$((objects + 1))
-    if test "$object" = metadata; then
-        metadata_objects=$((metadata_objects + 1))
-    else
+    if test "$object" != metadata; then
         file_objects=$((file_objects + 1))
+        printf 'file\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$identity" "$version" "$path" "$kind" "$size" "$digest" \
+            >>"$work/lock-files"
+        continue
     fi
-    entry=$work/object.$objects
+
+    metadata_objects=$((metadata_objects + 1))
+    entry=$work/metadata.$metadata_objects
     if ! sh "$STORE_TOOL" --store "$STORE" snapshot \
         "$digest" "$size" "$entry" >"$work/store-output" 2>"$work/store-error"
     then
-        printf 'lock-v2: %s object is missing or corrupt\n' "$object" >&2
+        printf 'lock-v2: metadata object is missing or corrupt\n' >&2
         printf '  identity %s\n' "$identity" >&2
         printf '  version  %s\n' "$version" >&2
-        if test "$path" != -; then
-            printf '  path     %s\n' "$path" >&2
-        fi
         sed 's/^/  /' "$work/store-error" >&2
         exit 1
     fi
     actual_size=$(wc -c <"$entry" | tr -d ' ')
     test "$actual_size" = "$size" ||
-        fail "$object object size does not match the lock
+        fail "metadata object size does not match the lock
+  identity $identity
+  version  $version
+  expected $size
+  actual   $actual_size"
+
+    LC_ALL=C tr -d '\011\012\040-\176' <"$entry" \
+        >"$work/metadata-non-ascii.$metadata_objects"
+    test ! -s "$work/metadata-non-ascii.$metadata_objects" ||
+        fail "metadata contains a byte outside ASCII, HT, and LF
+  identity $identity
+  version  $version"
+    metadata_last_byte=$(tail -c 1 "$entry" | od -An -tu1 | tr -d ' ')
+    test "$metadata_last_byte" = 10 ||
+        fail "metadata must end in exactly one LF
+  identity $identity
+  version  $version"
+    metadata_longest_line=$(LC_ALL=C wc -L <"$entry" | tr -d ' ')
+    test "$metadata_longest_line" -le "$MAX_LINE_BYTES" ||
+        fail "metadata line exceeds the $MAX_LINE_BYTES-byte structural bound
+  identity $identity
+  version  $version
+  actual   $metadata_longest_line"
+    metadata_rows=$(wc -l <"$entry" | tr -d ' ')
+    test "$metadata_rows" -le "$MAX_METADATA_ROWS" ||
+        fail "metadata exceeds the $MAX_METADATA_ROWS-row structural bound
+  identity $identity
+  version  $version
+  actual   $metadata_rows"
+
+    emit_files=0
+    test "$selection" != selected || emit_files=1
+    if ! LC_ALL=C awk -v expected_identity="$identity" \
+        -v expected_version="$version" -v emit_files="$emit_files" \
+        -f "$PROTOCOL_VALIDATOR" -f "$METADATA_VALIDATOR" "$entry" \
+        >"$work/metadata-plan.$metadata_objects"
+    then
+        fail "metadata grammar is invalid
+  identity $identity
+  version  $version"
+    fi
+
+    object_dependency_edges=$(LC_ALL=C awk -F '\t' \
+        '$1 == "dependency" { count++ } END { print count + 0 }' \
+        "$work/metadata-plan.$metadata_objects")
+    metadata_dependency_edges=$((metadata_dependency_edges + object_dependency_edges))
+    test "$metadata_dependency_edges" -le "$MAX_REMOTE_DEPENDENCY_EDGES" ||
+        fail "remote metadata dependency edges exceed the $MAX_REMOTE_DEPENDENCY_EDGES bound
+  identity $identity
+  version  $version
+  actual   $metadata_dependency_edges"
+
+    object_file_descriptors=$(LC_ALL=C awk -F '\t' \
+        '$1 == "file" || $1 == "descriptor" { count++ }
+         END { print count + 0 }' "$work/metadata-plan.$metadata_objects")
+    metadata_file_descriptors=$((metadata_file_descriptors + object_file_descriptors))
+    test "$metadata_file_descriptors" -le "$MAX_METADATA_FILE_DESCRIPTORS" ||
+        fail "metadata file descriptors exceed the $MAX_METADATA_FILE_DESCRIPTORS bound
+  identity $identity
+  version  $version
+  actual   $metadata_file_descriptors"
+
+    if test "$selection" = selected; then
+        LC_ALL=C awk -F '\t' '$1 == "file" { print }' \
+            "$work/metadata-plan.$metadata_objects" >>"$work/metadata-files"
+    fi
+done <"$work/objects"
+
+if ! cmp -s "$work/metadata-files" "$work/lock-files"; then
+    printf 'lock-v2: selected metadata file descriptors do not exactly match lock file rows\n' >&2
+    LC_ALL=C diff -u "$work/metadata-files" "$work/lock-files" 2>/dev/null |
+        head -n 12 | sed 's/^/  /' >&2 || :
+    exit 1
+fi
+
+# Pass two consumes only lock rows already proven byte-identical to selected
+# metadata descriptors.
+verified_file_objects=0
+while IFS="$tab" read -r object identity version path kind size digest selection; do
+    test "$object" = file || continue
+    verified_file_objects=$((verified_file_objects + 1))
+    entry=$work/file.$verified_file_objects
+    if ! sh "$STORE_TOOL" --store "$STORE" snapshot \
+        "$digest" "$size" "$entry" >"$work/store-output" 2>"$work/store-error"
+    then
+        printf 'lock-v2: file object is missing or corrupt\n' >&2
+        printf '  identity %s\n' "$identity" >&2
+        printf '  version  %s\n' "$version" >&2
+        printf '  path     %s\n' "$path" >&2
+        sed 's/^/  /' "$work/store-error" >&2
+        exit 1
+    fi
+    actual_size=$(wc -c <"$entry" | tr -d ' ')
+    test "$actual_size" = "$size" ||
+        fail "file object size does not match the lock
   identity $identity
   version  $version
   path     $path
   expected $size
   actual   $actual_size"
-    if test "$object" = file && test "$kind" = source; then
+    if test "$kind" = source; then
         command -v iconv >/dev/null 2>&1 ||
             fail 'iconv is required to validate locked source UTF-8'
         iconv -f UTF-8 -t UTF-8 "$entry" >/dev/null 2>"$work/iconv-error" ||
@@ -174,7 +287,6 @@ while IFS="$tab" read -r object identity version path kind size digest; do
   path     $path"
     fi
 done <"$work/objects"
-
-printf 'lock-v2: inspected canonical envelope; %s metadata and %s file reference(s) matched private store snapshots\n' \
+printf 'lock-v2: inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; %s metadata and %s file reference(s) matched private store snapshots\n' \
     "$metadata_objects" "$file_objects"
-printf 'lock-v2: metadata grammar, descriptor bijection, tool/requirements identity, re-resolution, and migration remain outside this slice\n'
+printf 'lock-v2: catalog/history, dependency reachability/re-resolution, tool/requirements identity, writer/migration/fetch, and affine same-handle consumption remain outside this slice\n'

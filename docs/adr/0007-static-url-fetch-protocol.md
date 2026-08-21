@@ -126,6 +126,8 @@ more file rows sorted by path bytes. The file ends with exactly one LF. Blank
 lines, comments, CR, escape syntax, unknown row kinds, wrong field counts,
 duplicates, or hostile order are refused. Metadata identity and version must
 equal the request and catalog row; a redirect cannot change either.
+Dependency identity order is strict: one metadata document cannot repeat an
+identity with the same or a different minimum version.
 
 A dependency is only a canonical identity and exact minimum version, matching
 `contracts/manifest.toml`. A file descriptor is only a path, kind, unsigned
@@ -419,6 +421,13 @@ checked before digest to reject truncation and overrun by name. A repeated
 identity, version, metadata document, or file counts against the totals before
 deduplication, so an attacker cannot spend unbounded work by repeating one
 small object.
+The 65,536 file-descriptor closure limit counts descriptors in every parsed
+selected and superseded metadata document, even though only selected-version
+file blobs are acquired. The 16,384 edge limit includes remote dependency rows
+from every such document as well as root and member edges; a checkpoint that
+does not yet have manifest/requirements bytes may conservatively apply the
+same 16,384 ceiling to remote metadata rows alone, but cannot claim the full
+closure-edge proof.
 
 Cancellation is an explicit fetch authority, checked between bounded I/O
 steps. Cancellation or deadline leaves the previous lock unchanged and can

@@ -68,6 +68,31 @@ expect_refusal() (
 $(sed 's/^/    /' "$WORK/refusal.out")"
 )
 
+write_lock_with_metadata() (
+    metadata_file=$1
+    metadata_row=$2
+    out=$3
+    metadata_hash=$(add_object "$metadata_file")
+    metadata_size=$(wc -c <"$metadata_file" | tr -d ' ')
+    altered_body=$out.body
+    awk -F '\t' -v OFS='\t' -v row="$metadata_row" \
+        -v size="$metadata_size" -v hash="$metadata_hash" '
+        NR == row { $4 = size; $5 = hash }
+        { print }
+    ' "$body" >"$altered_body"
+    write_lock "$altered_body" "$out"
+)
+
+expect_metadata_refusal() (
+    label=$1
+    needle=$2
+    metadata_file=$3
+    metadata_row=${4:-5}
+    hostile_lock=$WORK/metadata-$(printf '%s' "$label" | tr ' /' '--').lock
+    write_lock_with_metadata "$metadata_file" "$metadata_row" "$hostile_lock"
+    expect_refusal "$label" "$needle" "$hostile_lock"
+)
+
 test -x "$LOCK_TOOL" || fail 'the lock-v2 envelope verifier is not executable'
 test -x "$STORE_TOOL" || fail 'the store adapter is not executable'
 
@@ -75,23 +100,47 @@ id_a=https://example.org/a/
 id_b=https://example.org/b/v2/
 id_local=https://example.org/local/
 
-printf 'metadata a 1.0.0\n' >"$WORK/objects/meta-a-old"
-printf 'metadata a 1.2.0\n' >"$WORK/objects/meta-a-selected"
-printf 'metadata b 2.0.0\n' >"$WORK/objects/meta-b"
 printf 'shared opaque bytes\n' >"$WORK/objects/shared-data"
 printf 'fn main(): Int { 0 }\n' >"$WORK/objects/main-source"
+
+shared=$(add_object "$WORK/objects/shared-data")
+source=$(add_object "$WORK/objects/main-source")
+
+size_shared=$(wc -c <"$WORK/objects/shared-data" | tr -d ' ')
+size_source=$(wc -c <"$WORK/objects/main-source" | tr -d ' ')
+unselected_size=$(printf 'unselected bytes\n' | wc -c | tr -d ' ')
+unselected_digest=$(printf 'unselected bytes\n' | sha256)
+
+{
+    printf 'kofun-metadata/v1\n'
+    printf 'identity\t%s\n' "$id_a"
+    printf 'version\t1.0.0\n'
+    # Superseded descriptors remain authenticated metadata, but their blobs
+    # are not selected and therefore need no lock file row or store object.
+    printf 'file\told.txt\tdata\t%s\t%s\n' \
+        "$unselected_size" "$unselected_digest"
+} >"$WORK/objects/meta-a-old"
+{
+    printf 'kofun-metadata/v1\n'
+    printf 'identity\t%s\n' "$id_a"
+    printf 'version\t1.2.0\n'
+    printf 'dependency\t%s\t2.0.0\n' "$id_b"
+    printf 'file\tREADME.md\tdata\t%s\t%s\n' "$size_shared" "$shared"
+    printf 'file\tsrc/main.kofun\tsource\t%s\t%s\n' "$size_source" "$source"
+} >"$WORK/objects/meta-a-selected"
+{
+    printf 'kofun-metadata/v1\n'
+    printf 'identity\t%s\n' "$id_b"
+    printf 'version\t2.0.0\n'
+    printf 'file\tdata/shared.bin\tdata\t%s\t%s\n' "$size_shared" "$shared"
+} >"$WORK/objects/meta-b"
 
 meta_a_old=$(add_object "$WORK/objects/meta-a-old")
 meta_a=$(add_object "$WORK/objects/meta-a-selected")
 meta_b=$(add_object "$WORK/objects/meta-b")
-shared=$(add_object "$WORK/objects/shared-data")
-source=$(add_object "$WORK/objects/main-source")
-
 size_meta_a_old=$(wc -c <"$WORK/objects/meta-a-old" | tr -d ' ')
 size_meta_a=$(wc -c <"$WORK/objects/meta-a-selected" | tr -d ' ')
 size_meta_b=$(wc -c <"$WORK/objects/meta-b" | tr -d ' ')
-size_shared=$(wc -c <"$WORK/objects/shared-data" | tr -d ' ')
-size_source=$(wc -c <"$WORK/objects/main-source" | tr -d ' ')
 tool_digest=$(printf 'lock-v2 envelope tool\n' | sha256)
 requirements_digest=$(printf 'lock-v2 requirements\n' | sha256)
 
@@ -116,16 +165,354 @@ lock_before=$(sha256 <"$lock")
 store_before=$(find "$STORE" -type f -print | LC_ALL=C sort | xargs sha256sum | sha256)
 verify "$lock" >"$WORK/valid.out" 2>&1 ||
     fail "the canonical envelope did not verify: $(cat "$WORK/valid.out")"
-grep -Fq 'inspected canonical envelope; 3 metadata and 3 file reference(s) matched private store snapshots' \
+grep -Fq 'inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; 3 metadata and 3 file reference(s) matched private store snapshots' \
     "$WORK/valid.out" ||
     fail 'the positive fixture did not account for every metadata/file row'
-grep -Fq 'metadata grammar, descriptor bijection, tool/requirements identity, re-resolution, and migration remain outside this slice' \
+grep -Fq 'catalog/history, dependency reachability/re-resolution, tool/requirements identity, writer/migration/fetch, and affine same-handle consumption remain outside this slice' \
     "$WORK/valid.out" ||
     fail 'the partial verifier did not state its remaining boundary'
 test "$(sha256 <"$lock")" = "$lock_before" ||
     fail 'inspection changed the explicit lock input'
 test "$(find "$STORE" -type f -print | LC_ALL=C sort | xargs sha256sum | sha256)" = "$store_before" ||
     fail 'inspection changed the explicit store input'
+test ! -e "$(entry_for "$unselected_digest")" ||
+    fail 'the superseded-only descriptor unexpectedly had a store object'
+
+# Metadata mutations are content-addressed, installed in the store, reflected
+# in the matching lock row, and then covered by a new lock self-digest. Each
+# refusal therefore reaches the metadata parser or descriptor relation rather
+# than succeeding only because an outer digest noticed the test edit.
+sed '1s/.*/wrong-metadata-header/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-wrong-header"
+expect_metadata_refusal 'metadata header' 'first line is not exactly kofun-metadata/v1' \
+    "$WORK/metadata-wrong-header"
+
+sed '2s#https://example\.org/a/#https://example.org/other/#' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-wrong-identity"
+expect_metadata_refusal 'metadata identity binding' 'identity does not match its lock row' \
+    "$WORK/metadata-wrong-identity"
+
+sed '3s/1\.2\.0/1.3.0/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-wrong-version"
+expect_metadata_refusal 'metadata version binding' 'version does not match its lock row' \
+    "$WORK/metadata-wrong-version"
+
+awk 'NR == 1 { printf "%s\r\n", $0; next } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-cr"
+expect_metadata_refusal 'metadata CR' 'outside ASCII, HT, and LF' "$WORK/metadata-cr"
+
+cp "$WORK/objects/meta-a-selected" "$WORK/metadata-nul"
+printf '\000\n' >>"$WORK/metadata-nul"
+expect_metadata_refusal 'metadata NUL' 'outside ASCII, HT, and LF' "$WORK/metadata-nul"
+
+head -c -1 "$WORK/objects/meta-a-selected" >"$WORK/metadata-no-lf"
+expect_metadata_refusal 'metadata final LF' 'metadata must end in exactly one LF' \
+    "$WORK/metadata-no-lf"
+
+awk 'NR == 4 { print "" } { print }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-blank"
+expect_metadata_refusal 'metadata blank row' 'unknown or blank metadata row kind' \
+    "$WORK/metadata-blank"
+
+awk 'NR == 4 { print "# comment" } { print }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-comment"
+expect_metadata_refusal 'metadata comment' 'unknown or blank metadata row kind' \
+    "$WORK/metadata-comment"
+
+awk 'NR == 4 { print $0 "\t"; next } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-trailing-field"
+expect_metadata_refusal 'metadata trailing field' 'dependency row must have three fields' \
+    "$WORK/metadata-trailing-field"
+
+awk 'NR == 3 { print; print "kofun-metadata/v1"; next } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-duplicate-header"
+expect_metadata_refusal 'metadata duplicate header' \
+    'unknown or blank metadata row kind' "$WORK/metadata-duplicate-header"
+
+awk 'NR == 4 { dependency = $0; next }
+     { print }
+     END { print dependency }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-dependency-after-file"
+expect_metadata_refusal 'metadata dependency phase' 'dependency row appears after file rows' \
+    "$WORK/metadata-dependency-after-file"
+
+awk 'NR == 4 {
+         print
+         sub(/2\.0\.0$/, "2.1.0")
+         print
+         next
+     }
+     { print }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-duplicate-dependency"
+expect_metadata_refusal 'metadata duplicate dependency' 'duplicate dependency identity' \
+    "$WORK/metadata-duplicate-dependency"
+
+awk -v higher='https://example.org/c/' 'NR == 4 {
+         printf "dependency\t%s\t1.0.0\n", higher
+     }
+     { print }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-dependency-order"
+expect_metadata_refusal 'metadata dependency order' \
+    'dependency rows are not in strict identity-byte order' \
+    "$WORK/metadata-dependency-order"
+
+sed '4s#https://example\.org/b/v2/#https://127.1/#' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-ip-dependency"
+expect_metadata_refusal 'metadata numeric IP dependency' \
+    'uses a forbidden numeric IP literal form' "$WORK/metadata-ip-dependency"
+
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    n=0
+    while test "$n" -le 256; do
+        printf 'dependency\thttps://deps.example.org/d%03d/\t1.0.0\n' "$n"
+        n=$((n + 1))
+    done
+    printf 'file\tREADME.md\tdata\t%s\t%s\n' "$size_shared" "$shared"
+} >"$WORK/metadata-too-many-dependencies"
+expect_metadata_refusal 'metadata dependency count' 'direct dependency count exceeds 256' \
+    "$WORK/metadata-too-many-dependencies"
+
+sed '5,6d' "$WORK/objects/meta-a-selected" >"$WORK/metadata-no-files"
+expect_metadata_refusal 'metadata missing file' 'metadata has no file row' \
+    "$WORK/metadata-no-files"
+
+sed '5s/README\.md/CON.txt/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-device-path"
+expect_metadata_refusal 'metadata device path' 'Windows device segment' \
+    "$WORK/metadata-device-path"
+
+awk 'NR == 5 {
+         print
+         split($0, f, "\t")
+         printf "file\treadme.MD\tdata\t%s\t%s\n", f[4], f[5]
+         next
+     }
+     { print }' "$WORK/objects/meta-a-selected" >"$WORK/metadata-casefold"
+expect_metadata_refusal 'metadata case-fold path' \
+    'duplicates after ASCII case folding' "$WORK/metadata-casefold"
+
+awk 'NR == 6 {
+         split($0, f, "\t")
+         printf "file\tsrc\tdata\t%s\t%s\n", f[4], f[5]
+     }
+     { print }' "$WORK/objects/meta-a-selected" >"$WORK/metadata-prefix"
+expect_metadata_refusal 'metadata prefix path' 'descends through another file' \
+    "$WORK/metadata-prefix"
+
+awk 'NR == 5 { first = $0; next }
+     NR == 6 { print; print first; next }
+     { print }' "$WORK/objects/meta-a-selected" >"$WORK/metadata-file-order"
+expect_metadata_refusal 'metadata file order' \
+    'file rows are not in strict path-byte order' "$WORK/metadata-file-order"
+
+sed '5s/\tdata\t/\texecutable\t/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-kind"
+expect_metadata_refusal 'metadata file kind' 'neither source nor data' \
+    "$WORK/metadata-kind"
+
+awk -F '\t' -v OFS='\t' 'NR == 5 { $4 = "0" $4 } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-leading-size"
+expect_metadata_refusal 'metadata canonical size' 'not canonical unsigned decimal' \
+    "$WORK/metadata-leading-size"
+
+awk -F '\t' -v OFS='\t' 'NR == 5 { $4 = 67108865 } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-oversize-file"
+expect_metadata_refusal 'metadata file size bound' 'file size exceeds its bound' \
+    "$WORK/metadata-oversize-file"
+
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    n=0
+    while test "$n" -le 8; do
+        printf 'file\tdata/f%02d\tdata\t67108864\t%s\n' "$n" \
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+        n=$((n + 1))
+    done
+} >"$WORK/metadata-package-bytes"
+expect_metadata_refusal 'metadata package byte bound' \
+    'metadata file bytes exceed 512 MiB' "$WORK/metadata-package-bytes"
+
+awk -F '\t' -v OFS='\t' 'NR == 5 { $5 = toupper($5) } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-uppercase-digest"
+expect_metadata_refusal 'metadata canonical digest' 'not one lowercase sha256 digest' \
+    "$WORK/metadata-uppercase-digest"
+
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    n=0
+    while test "$n" -le 4096; do
+        printf 'file\tdata/f%04d\tdata\t0\t%s\n' "$n" \
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+        n=$((n + 1))
+    done
+} >"$WORK/metadata-too-many-files"
+expect_metadata_refusal 'metadata file count' 'file descriptor count exceeds 4096' \
+    "$WORK/metadata-too-many-files"
+
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\nunknown\t' "$id_a"
+    head -c 4097 /dev/zero | tr '\000' x
+    printf '\n'
+} >"$WORK/metadata-long-line"
+expect_metadata_refusal 'metadata line bound' \
+    'metadata line exceeds the 4096-byte structural bound' "$WORK/metadata-long-line"
+
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    n=0
+    while test "$n" -le 4352; do
+        printf '\n'
+        n=$((n + 1))
+    done
+} >"$WORK/metadata-too-many-rows"
+expect_metadata_refusal 'metadata row bound' \
+    'metadata exceeds the 4355-row structural bound' "$WORK/metadata-too-many-rows"
+
+# Aggregate bounds count every parsed metadata document before deduplication,
+# including superseded versions whose file blobs are not selected.
+: >"$WORK/aggregate-dependency-metadata-rows"
+n=0
+while test "$n" -le 64; do
+    metadata_file=$WORK/objects/meta-dependency-aggregate-$n
+    {
+        printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.%s.0\n' "$id_a" "$n"
+        dependency=0
+        while test "$dependency" -le 255; do
+            printf 'dependency\thttps://deps.example.org/d%03d/\t1.0.0\n' \
+                "$dependency"
+            dependency=$((dependency + 1))
+        done
+        printf 'file\tdata.bin\tdata\t%s\t%s\n' "$size_shared" "$shared"
+    } >"$metadata_file"
+    metadata_hash=$(add_object "$metadata_file")
+    metadata_size=$(wc -c <"$metadata_file" | tr -d ' ')
+    printf 'metadata\t%s\t1.%s.0\t%s\t%s\n' \
+        "$id_a" "$n" "$metadata_size" "$metadata_hash" \
+        >>"$WORK/aggregate-dependency-metadata-rows"
+    n=$((n + 1))
+done
+{
+    printf 'package\t%s\tselected\t1.64.0\n' "$id_a"
+    cat "$WORK/aggregate-dependency-metadata-rows"
+    printf 'file\t%s\t1.64.0\tdata.bin\tdata\t%s\t%s\n' \
+        "$id_a" "$size_shared" "$shared"
+} >"$WORK/metadata-dependency-aggregate.body"
+write_lock "$WORK/metadata-dependency-aggregate.body" \
+    "$WORK/metadata-dependency-aggregate.lock"
+expect_refusal 'metadata dependency aggregate' \
+    'remote metadata dependency edges exceed the 16384 bound' \
+    "$WORK/metadata-dependency-aggregate.lock"
+grep -Fq 'actual   16640' "$WORK/refusal.out" ||
+    fail 'metadata dependency aggregate did not count every repeated edge'
+
+: >"$WORK/aggregate-file-metadata-rows"
+n=0
+while test "$n" -le 16; do
+    metadata_file=$WORK/objects/meta-file-aggregate-$n
+    {
+        printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.%s.0\n' "$id_a" "$n"
+        descriptor=0
+        while test "$descriptor" -le 4095; do
+            printf 'file\tdata/f%04d\tdata\t0\t%s\n' "$descriptor" \
+                'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+            descriptor=$((descriptor + 1))
+        done
+    } >"$metadata_file"
+    metadata_hash=$(add_object "$metadata_file")
+    metadata_size=$(wc -c <"$metadata_file" | tr -d ' ')
+    printf 'metadata\t%s\t1.%s.0\t%s\t%s\n' \
+        "$id_a" "$n" "$metadata_size" "$metadata_hash" \
+        >>"$WORK/aggregate-file-metadata-rows"
+    n=$((n + 1))
+done
+{
+    printf 'package\t%s\tselected\t1.16.0\n' "$id_a"
+    cat "$WORK/aggregate-file-metadata-rows"
+    descriptor=0
+    while test "$descriptor" -le 4095; do
+        printf 'file\t%s\t1.16.0\tdata/f%04d\tdata\t0\t%s\n' \
+            "$id_a" "$descriptor" \
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+        descriptor=$((descriptor + 1))
+    done
+} >"$WORK/metadata-file-aggregate.body"
+write_lock "$WORK/metadata-file-aggregate.body" "$WORK/metadata-file-aggregate.lock"
+expect_refusal 'metadata file aggregate' \
+    'metadata file descriptors exceed the 65536 bound' \
+    "$WORK/metadata-file-aggregate.lock"
+grep -Fq 'actual   69632' "$WORK/refusal.out" ||
+    fail 'metadata file aggregate did not count superseded descriptors'
+
+# Valid metadata with a different selected descriptor set reaches the exact
+# two-way relation check before file-row-driven snapshot validation begins.
+sed '5d' "$WORK/objects/meta-a-selected" >"$WORK/metadata-bijection-missing"
+expect_metadata_refusal 'metadata bijection missing' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-missing"
+
+awk 'NR == 6 {
+         split($0, f, "\t")
+         printf "file\textra.bin\tdata\t%s\t%s\n", f[4], f[5]
+     }
+     { print }' "$WORK/objects/meta-a-selected" >"$WORK/metadata-bijection-extra"
+expect_metadata_refusal 'metadata bijection extra' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-extra"
+
+sed '5s/README\.md/README.txt/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-bijection-path"
+expect_metadata_refusal 'metadata bijection path' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-path"
+
+sed '5s/\tdata\t/\tsource\t/' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-bijection-kind"
+expect_metadata_refusal 'metadata bijection kind' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-kind"
+
+awk -F '\t' -v OFS='\t' 'NR == 5 { $4 = $4 + 1 } { print }' \
+    "$WORK/objects/meta-a-selected" >"$WORK/metadata-bijection-size"
+expect_metadata_refusal 'metadata bijection size' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-size"
+
+awk -F '\t' -v OFS='\t' -v zero="$(printf '%064d' 0)" \
+    'NR == 5 { $5 = zero } { print }' "$WORK/objects/meta-a-selected" \
+    >"$WORK/metadata-bijection-digest"
+expect_metadata_refusal 'metadata bijection digest' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/metadata-bijection-digest"
+
+sed '1s/.*/wrong-superseded-header/' "$WORK/objects/meta-a-old" \
+    >"$WORK/metadata-bad-superseded"
+expect_metadata_refusal 'superseded metadata parse' \
+    'first line is not exactly kofun-metadata/v1' "$WORK/metadata-bad-superseded" 4
+
+# Descriptor comparison precedes every file-row-driven snapshot. With one
+# selected blob missing, a mismatched metadata plan must still fail as a
+# bijection; the canonical lock then reaches the file branch and names the
+# missing identity/version/path.
+write_lock_with_metadata "$WORK/metadata-bijection-path" 5 \
+    "$WORK/bijection-before-missing-file.lock"
+rm -f "$(entry_for "$source")"
+expect_refusal 'bijection before missing selected file' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/bijection-before-missing-file.lock"
+if verify "$lock" >"$WORK/missing-selected-file.out" 2>&1; then
+    fail 'a canonical lock accepted a missing selected file object'
+fi
+grep -Fq 'file object is missing or corrupt' "$WORK/missing-selected-file.out" ||
+    fail 'missing selected file did not reach the file snapshot refusal'
+grep -Fq "identity $id_a" "$WORK/missing-selected-file.out" ||
+    fail 'missing selected file refusal omitted its identity'
+grep -Fq 'version  1.2.0' "$WORK/missing-selected-file.out" ||
+    fail 'missing selected file refusal omitted its version'
+grep -Fq 'path     src/main.kofun' "$WORK/missing-selected-file.out" ||
+    fail 'missing selected file refusal omitted its path'
+source_again=$(add_object "$WORK/objects/main-source")
+test "$source_again" = "$source" || fail 'restoring selected source changed its digest'
 
 # A hand edit is caught before any semantic interpretation.
 sed 's/selected\t1\.2\.0/selected\t1.3.0/' "$lock" >"$WORK/edited.lock"
@@ -140,9 +527,16 @@ write_lock "$WORK/reordered.body" "$WORK/reordered.lock"
 expect_refusal 'package order' 'strict identity-byte order' "$WORK/reordered.lock"
 
 {
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.0.0\n' "$id_a"
+    printf 'file\t10\tdata\t%s\t%s\n' "$size_shared" "$shared"
+    printf 'file\t2\tdata\t%s\t%s\n' "$size_shared" "$shared"
+} >"$WORK/objects/meta-numeric-path"
+meta_numeric=$(add_object "$WORK/objects/meta-numeric-path")
+size_meta_numeric=$(wc -c <"$WORK/objects/meta-numeric-path" | tr -d ' ')
+{
     printf 'package\t%s\tselected\t1.0.0\n' "$id_a"
     printf 'metadata\t%s\t1.0.0\t%s\t%s\n' \
-        "$id_a" "$size_meta_a_old" "$meta_a_old"
+        "$id_a" "$size_meta_numeric" "$meta_numeric"
     printf 'file\t%s\t1.0.0\t10\tdata\t%s\t%s\n' \
         "$id_a" "$size_shared" "$shared"
     printf 'file\t%s\t1.0.0\t2\tdata\t%s\t%s\n' \
@@ -160,11 +554,23 @@ expect_refusal 'numeric path byte order' 'file rows are not in identity/version/
     "$WORK/numeric-path-hostile.lock"
 
 {
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    printf 'file\told.bin\tdata\t%s\t%s\n' "$size_shared" "$shared"
+} >"$WORK/objects/meta-semantic-old"
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.10.0\n' "$id_a"
+    printf 'file\tdata.bin\tdata\t%s\t%s\n' "$size_shared" "$shared"
+} >"$WORK/objects/meta-semantic-selected"
+meta_semantic_old=$(add_object "$WORK/objects/meta-semantic-old")
+meta_semantic_selected=$(add_object "$WORK/objects/meta-semantic-selected")
+size_meta_semantic_old=$(wc -c <"$WORK/objects/meta-semantic-old" | tr -d ' ')
+size_meta_semantic_selected=$(wc -c <"$WORK/objects/meta-semantic-selected" | tr -d ' ')
+{
     printf 'package\t%s\tselected\t1.10.0\n' "$id_a"
     printf 'metadata\t%s\t1.2.0\t%s\t%s\n' \
-        "$id_a" "$size_meta_a_old" "$meta_a_old"
+        "$id_a" "$size_meta_semantic_old" "$meta_semantic_old"
     printf 'metadata\t%s\t1.10.0\t%s\t%s\n' \
-        "$id_a" "$size_meta_a_old" "$meta_a_old"
+        "$id_a" "$size_meta_semantic_selected" "$meta_semantic_selected"
     printf 'file\t%s\t1.10.0\tdata.bin\tdata\t%s\t%s\n' \
         "$id_a" "$size_shared" "$shared"
 } >"$WORK/semantic-order-valid.body"
@@ -436,13 +842,35 @@ test "$meta_a_again" = "$meta_a" || fail 'restoring corrupt metadata changed its
 # source row but succeeds when that descriptor kind is data.
 printf '\377' >"$WORK/objects/non-utf8"
 non_utf8=$(add_object "$WORK/objects/non-utf8")
-awk -F'\t' -v OFS='\t' -v hash="$non_utf8" \
-    'NR == 8 { $6 = 1; $7 = hash } { print }' "$body" >"$WORK/non-utf8-source.body"
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t1.2.0\n' "$id_a"
+    printf 'dependency\t%s\t2.0.0\n' "$id_b"
+    printf 'file\tREADME.md\tdata\t%s\t%s\n' "$size_shared" "$shared"
+    printf 'file\tsrc/main.kofun\tsource\t1\t%s\n' "$non_utf8"
+} >"$WORK/objects/meta-non-utf8-source"
+meta_non_utf8_source=$(add_object "$WORK/objects/meta-non-utf8-source")
+size_meta_non_utf8_source=$(wc -c <"$WORK/objects/meta-non-utf8-source" | tr -d ' ')
+awk -F'\t' -v OFS='\t' -v metadata_hash="$meta_non_utf8_source" \
+    -v metadata_size="$size_meta_non_utf8_source" -v file_hash="$non_utf8" '
+    NR == 5 { $4 = metadata_size; $5 = metadata_hash }
+    NR == 8 { $6 = 1; $7 = file_hash }
+    { print }
+' "$body" >"$WORK/non-utf8-source.body"
 write_lock "$WORK/non-utf8-source.body" "$WORK/non-utf8-source.lock"
 expect_refusal 'source UTF-8' 'locked source is not valid UTF-8' \
     "$WORK/non-utf8-source.lock"
-awk -F'\t' -v OFS='\t' -v hash="$non_utf8" \
-    'NR == 9 { $6 = 1; $7 = hash } { print }' "$body" >"$WORK/opaque-data.body"
+{
+    printf 'kofun-metadata/v1\nidentity\t%s\nversion\t2.0.0\n' "$id_b"
+    printf 'file\tdata/shared.bin\tdata\t1\t%s\n' "$non_utf8"
+} >"$WORK/objects/meta-opaque-data"
+meta_opaque_data=$(add_object "$WORK/objects/meta-opaque-data")
+size_meta_opaque_data=$(wc -c <"$WORK/objects/meta-opaque-data" | tr -d ' ')
+awk -F'\t' -v OFS='\t' -v metadata_hash="$meta_opaque_data" \
+    -v metadata_size="$size_meta_opaque_data" -v file_hash="$non_utf8" '
+    NR == 6 { $4 = metadata_size; $5 = metadata_hash }
+    NR == 9 { $6 = 1; $7 = file_hash }
+    { print }
+' "$body" >"$WORK/opaque-data.body"
 write_lock "$WORK/opaque-data.body" "$WORK/opaque-data.lock"
 verify "$WORK/opaque-data.lock" >"$WORK/opaque-data.out" 2>&1 ||
     fail 'an opaque data byte was incorrectly subjected to source UTF-8 rules'
@@ -475,4 +903,5 @@ grep -Fq 'lock v1 remains frozen' "$WORK/v1.out" ||
     fail 'v1 refusal did not name the frozen reader and explicit migration boundary'
 
 printf 'pm: lock v2 envelope order, relations, self-digest, and named-store snapshots: PASS\n'
+printf 'pm: metadata v1 grammar, aggregate bounds, and selected descriptor bijection: PASS\n'
 printf 'pm: lock v2 hostile fields, paths, framing, missing bytes, and source UTF-8: PASS\n'
