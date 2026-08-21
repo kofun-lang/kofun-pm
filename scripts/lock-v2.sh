@@ -1,15 +1,18 @@
 #!/bin/sh
 set -eu
 
-# Inspect the bounded lock-v2 envelope and every store object it names.
+# Inspect the bounded lock-v2 envelope and every store object it names, or
+# compose that inspection with the store's reverse inventory scan.
 #
 #   scripts/lock-v2.sh inspect LOCK --store /abs/path
+#   scripts/lock-v2.sh audit-store LOCK --store /abs/path
 #
-# This is deliberately not named plain `verify`: catalog/history binding,
-# dependency reachability and re-resolution, tool/requirements identity, and
-# the v2 writer/migration/fetch path are later slices. A partial verifier must
-# say which boundary it proves instead of returning success under the complete
-# command name.
+# Neither action is named plain `verify`: catalog/history binding, dependency
+# reachability and re-resolution, tool/requirements identity, and the v2
+# writer/migration/fetch path are later slices. `audit-store` is sequential,
+# not an atomic snapshot or same-open-file-description handoff. A partial
+# verifier must say which boundary it proves instead of returning success
+# under the complete command name.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STORE_TOOL=$ROOT/scripts/store.sh
@@ -47,8 +50,13 @@ is_digest() {
     test "${#1}" -eq 64
 }
 
-test "${1:-}" = inspect && test "$#" -eq 4 && test "${3:-}" = --store ||
-    fail 'usage: scripts/lock-v2.sh inspect LOCK --store ABSOLUTE_STORE'
+ACTION=${1:-}
+case $ACTION in
+    inspect | audit-store) ;;
+    *) fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE' ;;
+esac
+test "$#" -eq 4 && test "${3:-}" = --store ||
+    fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE'
 INPUT_LOCK=$2
 STORE=${4:-}
 test -n "$STORE" || fail '--store requires an explicit path'
@@ -287,6 +295,32 @@ while IFS="$tab" read -r object identity version path kind size digest selection
   path     $path"
     fi
 done <"$work/objects"
-printf 'lock-v2: inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; %s metadata and %s file reference(s) matched private store snapshots\n' \
-    "$metadata_objects" "$file_objects"
-printf 'lock-v2: catalog/history, dependency reachability/re-resolution, tool/requirements identity, writer/migration/fetch, and affine same-handle consumption remain outside this slice\n'
+if test "$ACTION" = inspect; then
+    printf 'lock-v2: inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; %s metadata and %s file reference(s) matched private store snapshots\n' \
+        "$metadata_objects" "$file_objects"
+    printf 'lock-v2: catalog/history, dependency reachability/re-resolution, tool/requirements identity, writer/migration/fetch, and affine same-handle consumption remain outside this slice\n'
+    exit 0
+fi
+
+# The lock-scoped direction deliberately ran first. It preserves package and
+# logical-path context for a named missing or corrupt object. Its success text
+# was not printed: a green first direction is not a successful two-way audit
+# when an unrelated store entry is malformed or corrupt.
+if ! sh "$STORE_TOOL" --store "$STORE" verify \
+    >"$work/global-store-output" 2>"$work/global-store-error"
+then
+    printf 'lock-v2: global store direction failed after lock-scoped inspection\n' >&2
+    sed 's/^/  /' "$work/global-store-error" >&2
+    exit 1
+fi
+
+global_store_summary=$(sed -n '1p' "$work/global-store-output")
+test "$(wc -l <"$work/global-store-output" | tr -d ' ')" -eq 1 ||
+    fail 'global store direction returned more than one success record'
+case $global_store_summary in
+    'store: '*" entries, each hashing to its own name") ;;
+    *) fail 'global store direction returned an unexpected success record' ;;
+esac
+printf 'lock-v2: sequential two-way store audit passed: %s metadata and %s selected-file reference(s) matched private snapshots; %s\n' \
+    "$metadata_objects" "$file_objects" "$global_store_summary"
+printf 'lock-v2: supplied-lock completeness, catalog/history, dependency reachability/re-resolution, tool/requirements identity, exact lock/store set equality, bounded or atomic global inventory, writer/migration/fetch, and affine same-handle consumption remain outside this slice\n'

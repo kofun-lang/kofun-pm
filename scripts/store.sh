@@ -393,9 +393,10 @@ case "${1:-}" in
         chmod 444 "$tmp"
         snapshot_digest=$(sha256_of "$tmp")
         test "$snapshot_digest" = "$digest" ||
-            fail "store entry changed while snapshotting
+            fail "store entry changed while snapshotting: $source
   expected $digest
-  actual   $snapshot_digest"
+  actual   $snapshot_digest
+  recovery remove the entry, then explicitly admit verified bytes again"
         mv -fT -- "$tmp" "$dest"
         tmp=
         rmdir "$tmp_dir"

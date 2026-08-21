@@ -56,6 +56,10 @@ verify() {
     env -i PATH="$PATH" sh "$LOCK_TOOL" inspect "$1" --store "$STORE"
 }
 
+audit_store() {
+    env -i PATH="$PATH" sh "$LOCK_TOOL" audit-store "$1" --store "$STORE"
+}
+
 expect_refusal() (
     label=$1
     needle=$2
@@ -67,6 +71,33 @@ expect_refusal() (
         fail "$label: refusal did not name '$needle':
 $(sed 's/^/    /' "$WORK/refusal.out")"
 )
+
+expect_audit_refusal() (
+    label=$1
+    needle=$2
+    lock=$3
+    if audit_store "$lock" >"$WORK/audit-refusal.out" 2>&1; then
+        fail "$label: hostile store/lock state passed the two-way audit"
+    fi
+    grep -Fq -- "$needle" "$WORK/audit-refusal.out" ||
+        fail "$label: audit refusal did not name '$needle':
+$(sed 's/^/    /' "$WORK/audit-refusal.out")"
+    if grep -Fq 'sequential two-way store audit passed' \
+        "$WORK/audit-refusal.out"
+    then
+        fail "$label: a failed second direction printed partial success"
+    fi
+)
+
+store_state() {
+    {
+        find "$STORE" -mindepth 1 -printf 'shape\t%y\t%m\t%p\t%l\n' |
+            LC_ALL=C sort
+        find "$STORE" -mindepth 1 -exec \
+            stat -c 'stat\t%d\t%i\t%h\t%f\t%n' {} + | LC_ALL=C sort
+        find "$STORE" -type f -exec sha256sum {} + | LC_ALL=C sort
+    } | sha256
+}
 
 write_lock_with_metadata() (
     metadata_file=$1
@@ -161,8 +192,15 @@ body=$WORK/body
 
 lock=$WORK/kofun.packages.lock
 write_lock "$body" "$lock"
+
+# A content-addressed store is not an exact projection of one lock. A valid
+# object left by another project or fetch is allowed by the global direction.
+printf 'valid unreferenced bytes\n' >"$WORK/objects/unreferenced"
+unreferenced=$(add_object "$WORK/objects/unreferenced")
+unreferenced_entry=$(entry_for "$unreferenced")
 lock_before=$(sha256 <"$lock")
-store_before=$(find "$STORE" -type f -print | LC_ALL=C sort | xargs sha256sum | sha256)
+lock_state_before=$(stat -c '%d\t%i\t%h\t%f\t%n' "$lock")
+store_before=$(store_state)
 verify "$lock" >"$WORK/valid.out" 2>&1 ||
     fail "the canonical envelope did not verify: $(cat "$WORK/valid.out")"
 grep -Fq 'inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; 3 metadata and 3 file reference(s) matched private store snapshots' \
@@ -173,10 +211,99 @@ grep -Fq 'catalog/history, dependency reachability/re-resolution, tool/requireme
     fail 'the partial verifier did not state its remaining boundary'
 test "$(sha256 <"$lock")" = "$lock_before" ||
     fail 'inspection changed the explicit lock input'
-test "$(find "$STORE" -type f -print | LC_ALL=C sort | xargs sha256sum | sha256)" = "$store_before" ||
+test "$(store_state)" = "$store_before" ||
     fail 'inspection changed the explicit store input'
 test ! -e "$(entry_for "$unselected_digest")" ||
     fail 'the superseded-only descriptor unexpectedly had a store object'
+
+audit_store "$lock" >"$WORK/audit-valid.out" 2>&1 ||
+    fail "the canonical lock/store did not pass both directions: $(cat "$WORK/audit-valid.out")"
+grep -Fq 'sequential two-way store audit passed: 3 metadata and 3 selected-file reference(s) matched private snapshots; store:' \
+    "$WORK/audit-valid.out" ||
+    fail 'the two-way audit did not account for both lock-scoped and global directions'
+grep -Fq 'exact lock/store set equality, bounded or atomic global inventory' \
+    "$WORK/audit-valid.out" ||
+    fail 'the sequential audit did not state its non-atomic/unbounded boundary'
+test -f "$unreferenced_entry" ||
+    fail 'the two-way audit treated a valid unreferenced store object as an error'
+test "$(sha256 <"$lock")" = "$lock_before" &&
+    test "$(stat -c '%d\t%i\t%h\t%f\t%n' "$lock")" = \
+        "$lock_state_before" ||
+    fail 'the two-way audit changed the explicit lock bytes, path, type, inode, links, or mode'
+test "$(store_state)" = "$store_before" ||
+    fail 'the two-way audit changed store paths, bytes, types, links, or modes'
+
+# An offline operation has no ambient network escape hatch. Put sentinels for
+# the usual clients first on PATH and supply hostile proxy/home variables; no
+# sentinel may be called or create its marker.
+network_bin=$WORK/network-bin
+network_marker=$WORK/network.called
+mkdir -p "$network_bin"
+for network_command in curl wget fetch ftp sftp ssh nc netcat openssl git; do
+    cp "$ROOT/tests/pm/network-sentinel.sh" "$network_bin/$network_command"
+done
+chmod +x "$network_bin"/*
+env -i PATH="$network_bin:$PATH" HOME="$WORK/hostile-home" \
+    XDG_CACHE_HOME="$WORK/hostile-cache" \
+    http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
+    ALL_PROXY=http://127.0.0.1:9 KPM_NETWORK_SENTINEL="$network_marker" \
+    sh "$LOCK_TOOL" audit-store "$lock" --store "$STORE" \
+    >"$WORK/audit-offline.out" 2>&1 ||
+    fail "the offline audit failed under hostile ambient network state: $(cat "$WORK/audit-offline.out")"
+test ! -e "$network_marker" ||
+    fail "the offline audit called ambient network command $(cat "$network_marker")"
+test ! -e "$WORK/hostile-home" && test ! -e "$WORK/hostile-cache" ||
+    fail 'the offline audit touched ambient home/cache state'
+test "$(store_state)" = "$store_before" ||
+    fail 'the hostile-environment audit changed the explicit store'
+
+# Global-only hostile objects are found after the lock-scoped direction. None
+# may leak the withheld first-direction success record.
+chmod 644 "$unreferenced_entry"
+expect_audit_refusal 'unreferenced writable object' 'store: WRITABLE' "$lock"
+chmod 444 "$unreferenced_entry"
+
+chmod 644 "$unreferenced_entry"
+tr v x <"$WORK/objects/unreferenced" >"$unreferenced_entry"
+chmod 444 "$unreferenced_entry"
+expect_audit_refusal 'unreferenced corrupt object' 'store: CORRUPT' "$lock"
+chmod 644 "$unreferenced_entry"
+cp "$WORK/objects/unreferenced" "$unreferenced_entry"
+chmod 444 "$unreferenced_entry"
+
+printf 'malformed extra\n' >"$STORE/malformed"
+chmod 444 "$STORE/malformed"
+expect_audit_refusal 'unreferenced malformed object' 'store: MALFORMED' "$lock"
+rm -f "$STORE/malformed"
+
+zero_digest=0000000000000000000000000000000000000000000000000000000000000000
+zero_entry=$(entry_for "$zero_digest")
+mkdir -p "$(dirname -- "$zero_entry")"
+ln -s "$WORK/objects/unreferenced" "$zero_entry"
+expect_audit_refusal 'unreferenced symlink object' 'store: NOT_REGULAR' "$lock"
+rm -f "$zero_entry"
+rmdir "$(dirname -- "$zero_entry")" 2>/dev/null || :
+
+fifo_digest=1111111111111111111111111111111111111111111111111111111111111111
+fifo_entry=$(entry_for "$fifo_digest")
+mkdir -p "$(dirname -- "$fifo_entry")"
+mkfifo "$fifo_entry"
+expect_audit_refusal 'unreferenced FIFO object' 'store: NOT_REGULAR' "$lock"
+rm -f "$fifo_entry"
+rmdir "$(dirname -- "$fifo_entry")" 2>/dev/null || :
+
+touch "$(dirname -- "$unreferenced_entry")/audit.incoming.1"
+expect_audit_refusal 'unreferenced interrupted object' 'interrupted write' "$lock"
+rm -f "$(dirname -- "$unreferenced_entry")/audit.incoming.1"
+
+mkdir "$STORE/zz"
+chmod 000 "$STORE/zz"
+expect_audit_refusal 'incomplete global inventory' \
+    'could not enumerate every object' "$lock"
+chmod 755 "$STORE/zz"
+rmdir "$STORE/zz"
+test "$(store_state)" = "$store_before" ||
+    fail 'restoring global-only hostile fixtures did not restore the store'
 
 # Metadata mutations are content-addressed, installed in the store, reflected
 # in the matching lock row, and then covered by a new lock self-digest. Each
@@ -490,12 +617,35 @@ sed '1s/.*/wrong-superseded-header/' "$WORK/objects/meta-a-old" \
 expect_metadata_refusal 'superseded metadata parse' \
     'first line is not exactly kofun-metadata/v1' "$WORK/metadata-bad-superseded" 4
 
+# A re-signed metadata grammar failure is still lock-scoped and precedes an
+# independently malformed global inventory.
+write_lock_with_metadata "$WORK/metadata-wrong-header" 5 \
+    "$WORK/audit-invalid-metadata.lock"
+printf 'global direction must not run\n' >"$STORE/malformed"
+chmod 444 "$STORE/malformed"
+expect_audit_refusal 'invalid metadata before global inventory' \
+    'first line is not exactly kofun-metadata/v1' \
+    "$WORK/audit-invalid-metadata.lock"
+if grep -Fq 'global store direction failed' "$WORK/audit-refusal.out"; then
+    fail 'global inventory ran before invalid re-signed metadata was refused'
+fi
+rm -f "$STORE/malformed"
+
 # Descriptor comparison precedes every file-row-driven snapshot. With one
 # selected blob missing, a mismatched metadata plan must still fail as a
 # bijection; the canonical lock then reaches the file branch and names the
 # missing identity/version/path.
 write_lock_with_metadata "$WORK/metadata-bijection-path" 5 \
     "$WORK/bijection-before-missing-file.lock"
+printf 'global direction must not run\n' >"$STORE/malformed"
+chmod 444 "$STORE/malformed"
+expect_audit_refusal 'metadata bijection before global inventory' \
+    'selected metadata file descriptors do not exactly match lock file rows' \
+    "$WORK/bijection-before-missing-file.lock"
+if grep -Fq 'global store direction failed' "$WORK/audit-refusal.out"; then
+    fail 'global inventory ran before selected descriptor mismatch was refused'
+fi
+rm -f "$STORE/malformed"
 rm -f "$(entry_for "$source")"
 expect_refusal 'bijection before missing selected file' \
     'selected metadata file descriptors do not exactly match lock file rows' \
@@ -511,12 +661,69 @@ grep -Fq 'version  1.2.0' "$WORK/missing-selected-file.out" ||
     fail 'missing selected file refusal omitted its version'
 grep -Fq 'path     src/main.kofun' "$WORK/missing-selected-file.out" ||
     fail 'missing selected file refusal omitted its path'
+expect_audit_refusal 'audit missing selected file' \
+    'file object is missing or corrupt' "$lock"
+grep -Fq "identity $id_a" "$WORK/audit-refusal.out" &&
+    grep -Fq 'version  1.2.0' "$WORK/audit-refusal.out" &&
+    grep -Fq 'path     src/main.kofun' "$WORK/audit-refusal.out" &&
+    grep -Fq "$(entry_for "$source")" "$WORK/audit-refusal.out" &&
+    grep -Fq "expected $source" "$WORK/audit-refusal.out" &&
+    grep -Fq 'recovery remove the object, then explicitly admit verified bytes again' \
+        "$WORK/audit-refusal.out" ||
+    fail "two-way missing-file refusal lost identity/version/path/digest context:
+$(sed 's/^/    /' "$WORK/audit-refusal.out")"
 source_again=$(add_object "$WORK/objects/main-source")
 test "$source_again" = "$source" || fail 'restoring selected source changed its digest'
+
+# Same-size corruption reaches digest comparison and reports expected/actual;
+# wrong-size corruption stops before hashing and reports both sizes instead.
+source_entry=$(entry_for "$source")
+chmod 644 "$source_entry"
+tr 0 1 <"$WORK/objects/main-source" >"$source_entry"
+chmod 444 "$source_entry"
+expect_audit_refusal 'audit same-size named corruption' \
+    'file object is missing or corrupt' "$lock"
+grep -Fq "identity $id_a" "$WORK/audit-refusal.out" &&
+    grep -Fq 'path     src/main.kofun' "$WORK/audit-refusal.out" &&
+    grep -Fq "$source_entry" "$WORK/audit-refusal.out" &&
+    grep -Fq "expected $source" "$WORK/audit-refusal.out" &&
+    grep -qE '^    actual   [0-9a-f]{64}$|^  actual   [0-9a-f]{64}$|^    actual   [0-9a-f]{64}' \
+        "$WORK/audit-refusal.out" &&
+    grep -Fq 'recovery remove the entry, then explicitly admit verified bytes again' \
+        "$WORK/audit-refusal.out" ||
+    fail "same-size named corruption did not report contextual expected/actual/recovery:
+$(sed 's/^/    /' "$WORK/audit-refusal.out")"
+rm -f "$source_entry"
+test "$(add_object "$WORK/objects/main-source")" = "$source" ||
+    fail 'restoring same-size-corrupt source changed its digest'
+
+chmod 644 "$source_entry"
+printf 'x' >>"$source_entry"
+chmod 444 "$source_entry"
+expect_audit_refusal 'audit wrong-size named corruption' \
+    'size mismatch is refused before hashing' "$lock"
+grep -Fq "identity $id_a" "$WORK/audit-refusal.out" &&
+    grep -Fq 'path     src/main.kofun' "$WORK/audit-refusal.out" &&
+    grep -Fq "expected-size $size_source" "$WORK/audit-refusal.out" &&
+    grep -Fq "actual-size   $((size_source + 1))" "$WORK/audit-refusal.out" &&
+    grep -Fq 'actual   not computed; size mismatch is refused before hashing' \
+        "$WORK/audit-refusal.out" ||
+    fail 'wrong-size named corruption did not stop before digest with both sizes'
+rm -f "$source_entry"
+test "$(add_object "$WORK/objects/main-source")" = "$source" ||
+    fail 'restoring wrong-size source changed its digest'
 
 # A hand edit is caught before any semantic interpretation.
 sed 's/selected\t1\.2\.0/selected\t1.3.0/' "$lock" >"$WORK/edited.lock"
 expect_refusal 'self digest' 'lock digest does not cover' "$WORK/edited.lock"
+printf 'global direction must not run\n' >"$STORE/malformed"
+chmod 444 "$STORE/malformed"
+expect_audit_refusal 'invalid lock before global inventory' \
+    'lock digest does not cover' "$WORK/edited.lock"
+if grep -Fq 'global store direction failed' "$WORK/audit-refusal.out"; then
+    fail 'global inventory ran before an invalid supplied lock was refused'
+fi
+rm -f "$STORE/malformed"
 
 # Semantic mutations are re-signed so each reaches the intended structural
 # refusal rather than passing only because the self digest noticed an edit.
@@ -826,6 +1033,16 @@ expect_refusal 'digest size conflict' 'one digest carries conflicting sizes' \
 
 rm -f "$(entry_for "$meta_b")"
 expect_refusal 'missing store object' 'object is missing or corrupt' "$lock"
+expect_audit_refusal 'audit missing metadata object' \
+    'metadata object is missing or corrupt' "$lock"
+grep -Fq "identity $id_b" "$WORK/audit-refusal.out" &&
+    grep -Fq 'version  2.0.0' "$WORK/audit-refusal.out" &&
+    grep -Fq "$(entry_for "$meta_b")" "$WORK/audit-refusal.out" &&
+    grep -Fq "expected $meta_b" "$WORK/audit-refusal.out" &&
+    grep -Fq 'recovery remove the object, then explicitly admit verified bytes again' \
+        "$WORK/audit-refusal.out" ||
+    fail "two-way missing-metadata refusal lost identity/version/digest context:
+$(sed 's/^/    /' "$WORK/audit-refusal.out")"
 meta_b_again=$(add_object "$WORK/objects/meta-b")
 test "$meta_b_again" = "$meta_b" || fail 'restoring metadata changed its digest'
 
@@ -892,6 +1109,30 @@ then
 fi
 grep -Fq 'must be an absolute path' "$WORK/relative.out" ||
     fail 'relative store refusal was not named'
+if sh "$LOCK_TOOL" audit-store "$lock" --store relative \
+    >"$WORK/audit-relative.out" 2>&1
+then
+    fail 'the two-way audit accepted a relative store boundary'
+fi
+grep -Fq 'must be an absolute path' "$WORK/audit-relative.out" ||
+    fail 'two-way relative store refusal was not named'
+if sh "$LOCK_TOOL" audit-store "$lock" --store "$STORE" unexpected \
+    >"$WORK/audit-args.out" 2>&1
+then
+    fail 'the two-way audit accepted unexpected arguments'
+fi
+grep -Fq 'usage: scripts/lock-v2.sh' "$WORK/audit-args.out" ||
+    fail 'two-way unexpected-argument refusal did not print its usage boundary'
+
+ln -s "$lock" "$WORK/lock-symlink"
+if sh "$LOCK_TOOL" audit-store "$WORK/lock-symlink" --store "$STORE" \
+    >"$WORK/audit-lock-symlink.out" 2>&1
+then
+    fail 'the two-way audit accepted a symlink lock input'
+fi
+grep -Fq 'lock is not a regular non-symlink file' \
+    "$WORK/audit-lock-symlink.out" ||
+    fail 'two-way lock-symlink refusal was not named'
 
 sed 's/kofun-pm\.lock\/v2/kofun-pm.lock\/v1/' "$lock" >"$WORK/v1.lock"
 if sh "$LOCK_TOOL" inspect "$WORK/v1.lock" --store "$STORE" \
@@ -901,7 +1142,15 @@ then
 fi
 grep -Fq 'lock v1 remains frozen' "$WORK/v1.out" ||
     fail 'v1 refusal did not name the frozen reader and explicit migration boundary'
+if sh "$LOCK_TOOL" audit-store "$WORK/v1.lock" --store "$STORE" \
+    >"$WORK/audit-v1.out" 2>&1
+then
+    fail 'the two-way audit accepted or migrated a v1 lock'
+fi
+grep -Fq 'lock v1 remains frozen' "$WORK/audit-v1.out" ||
+    fail 'two-way v1 refusal did not name the frozen reader/migration boundary'
 
 printf 'pm: lock v2 envelope order, relations, self-digest, and named-store snapshots: PASS\n'
 printf 'pm: metadata v1 grammar, aggregate bounds, and selected descriptor bijection: PASS\n'
+printf 'pm: explicit lock/store sequential two-way audit, offline and read-only: PASS\n'
 printf 'pm: lock v2 hostile fields, paths, framing, missing bytes, and source UTF-8: PASS\n'

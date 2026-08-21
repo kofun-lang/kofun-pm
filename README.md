@@ -201,14 +201,33 @@ rehashes and adopts that winner. A corrupt winner is named and never replaced.
 Lookup, link, and copy paths rehash before use, and a materialized destination
 is rehashed again.
 
+v0.7.0 composes the two released read-only directions for one explicit lock
+and store without calling the result complete `kpm verify`:
+
+```
+scripts/lock-v2.sh audit-store LOCK --store /absolute/store
+```
+
+It first runs the lock-scoped inspection so a named failure retains package,
+version, and logical-path context. Only after that succeeds does it enumerate
+the whole explicit store, rejecting malformed, corrupt, writable, special, or
+interrupted entries. The first pass's success is withheld until the second
+passes. A valid unreferenced object is allowed: a global content-addressed
+store is shared by locks rather than an exact projection of one lock. The gate
+also runs this action with network-command sentinels and hostile proxy/home
+state, and proves that neither input's bytes, paths, types, links, or modes
+change.
+
 **What is not here yet:** a *complete* lock that enumerates every required
 rough-graph input still needs the lock v2 writer, catalog/history acquisition
 and graph binding, and fetch. For a supplied structurally valid v2 lock, the
-inspector does prove that every metadata and selected-file object directly
-named by its rows exists with the declared bytes; it does not prove that the
-rough graph omitted no row. Shell also cannot yet prove the affine
-same-open-file-description handoff ADR 7 requires, so this is not a claim that
-the complete store/fetch boundary is finished.
+inspector proves that every metadata and selected-file object directly named
+by its rows exists with the declared bytes; `audit-store` additionally proves,
+in a later sequential pass, that every enumerated store entry hashes to its
+name. Neither proves that the rough graph omitted no row, exact lock/store set
+equality, a bounded or atomic global snapshot, or the affine handoff of the
+same open file description. This is not a claim that the complete store/fetch
+boundary is finished.
 
 ### 5. Fetch is explicit; everything after it is offline
 
@@ -321,15 +340,21 @@ must then be byte-identical in both directions to the lock file rows across
 identity, version, path, kind, size, and digest before snapshot or validation
 is initiated from any selected file row.
 
-It remains `inspect`, not `verify`, because it intentionally does **not** prove
-catalog authenticity/history, dependency reachability or the complete rough
-graph, recompute the tool or requirements identity, re-resolve MVS, write a
-lock, migrate v1, fetch, scan the store in reverse, or prove the affine
-same-handle consumer boundary. Its success text states those absences. The
-hostile gate installs and re-signs semantic metadata mutations so framing,
-header binding, order, counts, canonical fields, selected/superseded parsing,
-and every descriptor mismatch reach the intended check beyond both outer
-digests.
+v0.7.0 adds `audit-store`, which performs that same lock-scoped pass first and
+then the existing whole-store reverse scan. It emits no partial success when
+the global direction fails and still deliberately avoids the complete
+`verify` name. Its store-wide work is proportional to the explicitly supplied
+global store rather than to one lock, and the two passes are sequential rather
+than an atomic snapshot.
+
+Both actions intentionally do **not** prove catalog authenticity/history,
+dependency reachability or the complete rough graph, recompute the tool or
+requirements identity, re-resolve MVS, write a lock, migrate v1, fetch, prove
+exact lock/store set equality, or prove the affine same-handle consumer
+boundary. Their success text states those absences. The hostile gate installs
+and re-signs semantic metadata mutations so framing, header binding, order,
+counts, canonical fields, selected/superseded parsing, and every descriptor
+mismatch reach the intended check beyond both outer digests.
 
 For the released v1 verifier, that buys four failures where other tools have
 one, and "the lock is wrong"
@@ -364,9 +389,10 @@ pinned inputs is therefore a check rather than a hope: same inputs → same lock
 byte-identical. The gate proves that property for v1 today; the v0.6.0 inspector
 proves the strict v2 envelope, every strict metadata snapshot, the selected
 descriptor bijection, and sequential integrity of every lock-named store
-snapshot. P4 still has to connect those checks to authenticated catalog
-history, the manifest, a writer, and offline re-resolution before making the
-complete v2 claim.
+snapshot. v0.7.0 composes that with a subsequent reverse scan of the explicit
+store, while allowing valid unreferenced objects. P4 still has to connect
+those checks to authenticated catalog history, the manifest, a writer, and
+offline re-resolution before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
