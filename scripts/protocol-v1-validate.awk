@@ -52,8 +52,51 @@ function version_compare(left, right, a, b, count_a, count_b, i) {
     return 0
 }
 
-function identity(value, label, rest, slash, host, path, labels, count, i,
-                  numeric_host, segments, segment_count, segment) {
+function dns_host(value, label, labels, count, i, numeric_host) {
+    if (length(value) > 253 || value ~ /[^a-z0-9.-]/ ||
+        substr(value, 1, 1) == "." || substr(value, length(value), 1) == ".") {
+        reject(label " is not lowercase DNS A-label form: " value)
+        return 0
+    }
+    count = split(value, labels, "\\.")
+    numeric_host = 1
+    for (i = 1; i <= count; i++) {
+        if (labels[i] == "" || length(labels[i]) > 63 ||
+            labels[i] ~ /[^a-z0-9-]/ ||
+            substr(labels[i], 1, 1) !~ /[a-z0-9]/ ||
+            substr(labels[i], length(labels[i]), 1) !~ /[a-z0-9]/) {
+            reject(label " label is not canonical: " labels[i])
+            return 0
+        }
+        if (labels[i] !~ /^[0-9]+$/ && labels[i] !~ /^0x[0-9a-f]+$/)
+            numeric_host = 0
+    }
+    if (numeric_host) {
+        reject(label " uses a forbidden numeric IP literal form: " value)
+        return 0
+    }
+    return 1
+}
+
+function origin(value, label, host) {
+    if (length(value) > 261 || substr(value, 1, 8) != "https://") {
+        reject(label " is not one canonical https origin: " value)
+        return 0
+    }
+    host = substr(value, 9)
+    if (!dns_host(host, label " host"))
+        return 0
+    return 1
+}
+
+function identity_origin(value, rest, slash) {
+    rest = substr(value, 9)
+    slash = index(rest, "/")
+    return "https://" substr(rest, 1, slash - 1)
+}
+
+function identity(value, label, rest, slash, host, path,
+                  segments, segment_count, i, segment) {
     if (length(value) > 2048) {
         reject(label " exceeds 2048 bytes")
         return 0
@@ -70,28 +113,7 @@ function identity(value, label, rest, slash, host, path, labels, count, i,
     }
     host = substr(rest, 1, slash - 1)
     path = substr(rest, slash + 1)
-    if (length(host) > 253 || host ~ /[^a-z0-9.-]/ ||
-        substr(host, 1, 1) == "." || substr(host, length(host), 1) == ".") {
-        reject(label " host is not lowercase DNS A-label form: " host)
-        return 0
-    }
-    count = split(host, labels, "\\.")
-    numeric_host = 1
-    for (i = 1; i <= count; i++) {
-        if (labels[i] == "" || length(labels[i]) > 63 ||
-            labels[i] ~ /[^a-z0-9-]/ ||
-            substr(labels[i], 1, 1) !~ /[a-z0-9]/ ||
-            substr(labels[i], length(labels[i]), 1) !~ /[a-z0-9]/) {
-            reject(label " host label is not canonical: " labels[i])
-            return 0
-        }
-        if (labels[i] !~ /^[0-9]+$/ && labels[i] !~ /^0x[0-9a-f]+$/)
-            numeric_host = 0
-    }
-    if (numeric_host) {
-        reject(label " uses a forbidden numeric IP literal form: " host)
-        return 0
-    }
+    if (!dns_host(host, label " host")) return 0
     if (path != "") {
         segment_count = split(path, segments, "/")
         if (segments[segment_count] != "") {

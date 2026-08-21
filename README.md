@@ -218,9 +218,28 @@ also runs this action with network-command sentinels and hostile proxy/home
 state, and proves that neither input's bytes, paths, types, links, or modes
 change.
 
+v0.8.0 adds the first catalog-side read-only checkpoint for one explicitly
+supplied identity:
+
+```
+scripts/catalog-v1.sh inspect IDENTITY CATALOG --authority AUTHORITY
+scripts/catalog-v1.sh inspect IDENTITY CATALOG --authority AUTHORITY --history-lock LOCK
+```
+
+It snapshots one bounded catalog and authority file, derives the identity's
+exact HTTPS origin with the shared URL grammar, validates every strict sorted
+row, and requires that origin to be explicitly listed. With a history lock it
+reuses the complete lock-v2 envelope/body parser and compares every selected
+and superseded metadata descriptor for that identity. A missing locked version
+is a withdrawal/history violation; changed size or digest is an immutability
+violation; a catalog row not represented in that one lock is allowed. Without
+a matching lock row, success is named first observation rather than history.
+The action remains offline and read-only under hostile proxy and home state.
+
 **What is not here yet:** a *complete* lock that enumerates every required
-rough-graph input still needs the lock v2 writer, catalog/history acquisition
-and graph binding, and fetch. For a supplied structurally valid v2 lock, the
+rough-graph input still needs the lock v2 writer, live catalog/metadata/blob
+acquisition and authentication, graph binding, and fetch. For a supplied
+structurally valid v2 lock, the
 inspector proves that every metadata and selected-file object directly named
 by its rows exists with the declared bytes; `audit-store` additionally proves,
 in a later sequential pass, that every enumerated store entry hashes to its
@@ -245,7 +264,10 @@ no-replace store publication, winner rehash, and a same-handle handoff; the
 v0.4.0 shell store now gates descriptor verification, no-replace publication,
 concurrent winner rehash, and corrupt-winner non-overwrite. Same-handle handoff,
 fetch, the lock v2 writer, dependency-closure/re-resolution binding, and offline
-build evidence remain, so #14 stays open.
+build evidence remain, so #14 stays open. The v0.8.0 catalog checkpoint covers
+only supplied policy/catalog bytes and descriptors retained by one supplied
+lock: it does not prove that bytes came from that HTTPS origin, authenticate a
+publisher, prevent equivocation, or retain a complete catalog ledger.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -347,7 +369,16 @@ the global direction fails and still deliberately avoids the complete
 global store rather than to one lock, and the two passes are sequential rather
 than an atomic snapshot.
 
-Both actions intentionally do **not** prove catalog authenticity/history,
+v0.8.0 factors the full lock-v2 envelope and body parser into one shared
+structural adapter and adds `scripts/catalog-v1.sh`. The new action validates
+one private bounded catalog snapshot and authority snapshot, then optionally
+uses every metadata descriptor for the same identity in one private bounded
+lock snapshot. It distinguishes withdrawal from changed descriptors and
+states first observation when the supplied lock carries no matching remote
+descriptor. It does not read store objects or claim a complete historical
+catalog.
+
+The two store actions intentionally do **not** prove catalog authenticity/history,
 dependency reachability or the complete rough graph, recompute the tool or
 requirements identity, re-resolve MVS, write a lock, migrate v1, fetch, prove
 exact lock/store set equality, or prove the affine same-handle consumer
@@ -390,9 +421,11 @@ byte-identical. The gate proves that property for v1 today; the v0.6.0 inspector
 proves the strict v2 envelope, every strict metadata snapshot, the selected
 descriptor bijection, and sequential integrity of every lock-named store
 snapshot. v0.7.0 composes that with a subsequent reverse scan of the explicit
-store, while allowing valid unreferenced objects. P4 still has to connect
-those checks to authenticated catalog history, the manifest, a writer, and
-offline re-resolution before making the complete v2 claim.
+store, while allowing valid unreferenced objects. v0.8.0 separately validates
+one supplied authority/catalog pair and the continuity of descriptors actually
+retained by one supplied lock. P4 still has to connect those checks to live
+authenticated acquisition, a complete rough graph, the manifest, a writer,
+and offline re-resolution before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

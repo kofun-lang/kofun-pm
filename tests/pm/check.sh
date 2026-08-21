@@ -1204,6 +1204,7 @@ store verify >"$WORK/store.final" 2>&1 ||
     fail "the store did not verify after the damage was undone: $(cat "$WORK/store.final")"
 
 sh "$ROOT/tests/pm/lock-v2.sh"
+sh "$ROOT/tests/pm/catalog-v1.sh"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'
