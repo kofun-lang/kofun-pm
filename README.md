@@ -201,10 +201,11 @@ rehashes and adopts that winner. A corrupt winner is named and never replaced.
 Lookup, link, and copy paths rehash before use, and a materialized destination
 is rehashed again.
 
-**What is not here yet:** *every lock entry is present* still needs lock v2 and
-fetch. Shell cannot yet prove the affine same-open-file-description handoff ADR
-7 requires, so verified no-replace admission is a landed slice, not a claim
-that the complete store/fetch boundary is finished.
+**What is not here yet:** *every lock entry is present* still needs the lock v2
+writer, strict metadata parsing and descriptor bijection, and fetch. Shell
+cannot yet prove the affine same-open-file-description handoff ADR 7 requires,
+so verified no-replace admission is a landed slice, not a claim that the
+complete store/fetch boundary is finished.
 
 ### 5. Fetch is explicit; everything after it is offline
 
@@ -221,7 +222,8 @@ bits, decompression bombs, and install hooks from the protocol. ADR 7 requires
 no-replace store publication, winner rehash, and a same-handle handoff; the
 v0.4.0 shell store now gates descriptor verification, no-replace publication,
 concurrent winner rehash, and corrupt-winner non-overwrite. Same-handle handoff,
-fetch, lock v2, and offline build evidence remain, so #14 stays open.
+fetch, the lock v2 writer/metadata parser, and offline build evidence remain,
+so #14 stays open.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -281,10 +283,40 @@ which is only worth doing because MVS is a function. Re-resolving the same
 requirements must give the same answer, so `kpm verify` is a check rather than
 a hope. A lock over a *search* cannot make that claim, which is why locks over
 searches pin outputs only. ADR 7's lock v2 adds every visited rough-graph
-metadata descriptor and every selected file digest; that serialization lands
-with P4 rather than being claimed by v1.
+metadata descriptor and every selected file digest.
 
-That buys four failures where other tools have one, and "the lock is wrong"
+v0.5.0 lands a deliberately narrower read-only inspector for that future
+format:
+
+```
+scripts/lock-v2.sh inspect LOCK --store /absolute/store
+```
+
+It copies at most 256 MiB into a private lock snapshot, verifies the exact four
+headers and final self-digest, and parses package, metadata, and file sections
+in byte/semantic-version/path order. Canonical URL identities, versions,
+decimals, digests, paths, kinds, duplicates, workspace artifact absence,
+selected metadata, the maximum recorded metadata version, and digest/size
+consistency are all named checks. Every metadata/file digest is then copied
+from the explicit store into a private snapshot through the rehashing store
+adapter. The declared size is checked before digest work, and copying is capped
+at that size plus one byte before the snapshot is rehashed; source files must
+also be UTF-8. Hosts made entirely of decimal or `0x` hexadecimal labels,
+including legacy compact IPv4 spellings, are refused rather than left to
+platform resolver reinterpretation. The inspector does not mutate the lock or
+store and has no network path.
+
+It is called `inspect`, not `verify`, because it intentionally does **not**
+parse metadata bytes, prove the metadata-descriptor/file-row bijection,
+recompute the tool or requirements identity, re-resolve the rough graph, write
+a lock, migrate v1, or prove the affine same-handle consumer boundary. Its
+success text states those absences. The hostile gate re-signs semantic
+mutations so order, canonical-field, orphan/workspace, missing/corrupt byte,
+framing, path collision, and source-encoding refusals are exercised beyond the
+self-digest check.
+
+For the released v1 verifier, that buys four failures where other tools have
+one, and "the lock is wrong"
 sends a reader nowhere. The tool identity is the SHA-256 of a domain-framed
 closure: resolver core and shell, build wiring, lock tool, and the exact Kofun
 toolchain gitlink. It is not the repository commit, so an unrelated change
@@ -313,8 +345,11 @@ Lock v1 digests the requirements, the resolver/tool input closure, and its own
 complete body. Lock v2 also records the catalog-authenticated metadata digest
 and every source/data file digest. Re-resolving from the same manifest and
 pinned inputs is therefore a check rather than a hope: same inputs → same lock,
-byte-identical. The gate proves that property for v1 today; P4 extends the same
-gate to v2 rather than weakening it for fetched inputs.
+byte-identical. The gate proves that property for v1 today and the v0.5.0
+inspector proves the strict v2 envelope plus sequential integrity of every
+named store snapshot. P4 still has to connect those checks to parsed metadata,
+the manifest, a writer, and an offline re-resolution before making the complete
+v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

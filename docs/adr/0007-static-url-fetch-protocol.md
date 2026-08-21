@@ -35,7 +35,9 @@ at most 2,048 bytes. Protocol v1 accepts only this canonical subset:
 
 - the literal lowercase prefix `https://`;
 - a lowercase DNS A-label host, without user information, IP literal, trailing
-  dot, or explicit port (v1 is always port 443);
+  dot, or explicit port (v1 is always port 443); a host made entirely of
+  decimal or `0x` hexadecimal numeric labels is refused so legacy one- through
+  four-part IPv4 forms cannot be reinterpreted by the platform resolver;
 - path segments matching `[A-Za-z0-9._~-]+`, with neither `.` nor `..` as a
   segment, and exactly one trailing `/`;
 - no percent escape, backslash, whitespace, control byte, query, or fragment.
@@ -210,8 +212,11 @@ identity/version fails and asks for a separate fetch. There is no `--offline`
 flag because offline is not a mode to remember.
 
 A missing or corrupt offline input fails with package identity, version, path,
-expected digest and, when bytes exist, actual digest. It never upgrades itself
-to a network request.
+and expected digest. It reports expected and actual size first; when those
+match and digest comparison is reached, it also reports the actual digest. A
+size mismatch explicitly reports that the actual digest was not computed, so
+the size bound is enforced before hashing. It never upgrades itself to a
+network request.
 
 The present CLI DSL cannot express authority-bearing action signatures and all
 commands remain intentionally bound to the failing `greet` placeholder. After
@@ -359,11 +364,13 @@ to the parser, linker, or build. A check-then-open pathname API does not satisfy
 this contract.
 
 A corrupt existing entry is never used and must not wedge the store forever.
-The operation reports package, version, entry path, expected digest, actual
-digest, and recovery action. An offline operation stops with recovery
-instructions. A network-authorized fetch may quarantine or remove an entry in
-the store it manages, report that action, and acquire it again. It never
-silently overwrites or silently refetches corruption.
+The operation reports package, version, entry path, expected digest, and
+recovery action. It reports the actual digest only after expected and actual
+size match; on size mismatch it reports both sizes and that digest computation
+was skipped. An offline operation stops with recovery instructions. A
+network-authorized fetch may quarantine or remove an entry in the store it
+manages, report that action, and acquire it again. It never silently overwrites
+or silently refetches corruption.
 
 ### 10. Every untrusted collection and operation is bounded
 
@@ -400,6 +407,7 @@ Protocol v1 fixes these maxima before allocation or parsing:
 | catalog bytes in one fetch | 64 MiB |
 | metadata bytes in one fetch | 64 MiB |
 | file blob bytes in one fetch | 8 GiB |
+| one lock v2 file | 256 MiB |
 | HTTP request/connection attempts in one fetch, including redirects and failures | 70,000 |
 | DNS + connect + TLS establishment per attempt | 10 seconds |
 | response idle interval | 30 seconds |

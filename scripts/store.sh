@@ -7,6 +7,7 @@ set -eu
 #   scripts/store.sh --store /abs/path add FILE
 #   scripts/store.sh --store /abs/path admit DIGEST SIZE FILE
 #   scripts/store.sh --store /abs/path link DIGEST DEST
+#   scripts/store.sh --store /abs/path snapshot DIGEST SIZE DEST
 #   scripts/store.sh --store /abs/path verify
 #
 # pnpm's insight: a package version is immutable, so its bytes are its name.
@@ -65,6 +66,16 @@ sha256_of() {
     fi
 }
 
+size_of() {
+    if stat -c %s -- "$1" >/dev/null 2>&1; then
+        stat -c %s -- "$1"
+    elif stat -f %z -- "$1" >/dev/null 2>&1; then
+        stat -f %z -- "$1"
+    else
+        wc -c <"$1" | tr -d ' '
+    fi
+}
+
 is_digest() {
     case $1 in
         *[!0-9a-f]* | '') return 1 ;;
@@ -94,6 +105,13 @@ is_size() {
     esac
 }
 
+is_at_most() {
+    value=$1
+    maximum=$2
+    test "${#value}" -lt "${#maximum}" ||
+        { test "${#value}" -eq "${#maximum}" && test "$value" -le "$maximum"; }
+}
+
 tmp=
 tmp_dir=
 cleanup() {
@@ -109,11 +127,7 @@ cleanup() {
 trap cleanup 0
 trap 'cleanup; exit 1' 1 2 15
 
-# Rehash at every use. A digest-shaped path, existence, and mode are not proof
-# that the bytes still match. Symlinks and other non-regular objects are never
-# store entries because following one would move verification outside the
-# content-addressed namespace.
-check_entry() {
+check_entry_shape_and_size() {
     expected=$1
     entry=$2
     expected_entry_size=${3:-}
@@ -124,12 +138,39 @@ check_entry() {
   recovery remove the object, then explicitly admit verified bytes again"
     fi
 
-    actual_entry_size=$(wc -c <"$entry" | tr -d ' ')
-    actual=$(sha256_of "$entry")
-    if { test -n "$expected_entry_size" &&
-            test "$actual_entry_size" != "$expected_entry_size"; } ||
-        test "$actual" != "$expected"
+    actual_entry_size=$(size_of "$entry")
+    if test -n "$expected_entry_size" &&
+        test "$actual_entry_size" != "$expected_entry_size"
     then
+        printf 'store: CORRUPT %s\n' "$entry" >&2
+        printf '  expected-size %s\n' "$expected_entry_size" >&2
+        printf '  actual-size   %s\n' "$actual_entry_size" >&2
+        printf '  expected %s\n' "$expected" >&2
+        printf '  actual   not computed; size mismatch is refused before hashing\n' >&2
+        printf '  recovery remove the entry, then explicitly admit verified bytes again\n' >&2
+        exit 1
+    fi
+
+    if test -w "$entry"; then
+        fail "WRITABLE $entry
+  expected $expected
+  a shared writable inode can change after verification"
+    fi
+}
+
+# Rehash at every ordinary use. A digest-shaped path, existence, and mode are
+# not proof that the bytes still match. Symlinks and other non-regular objects
+# are never store entries because following one would move verification
+# outside the content-addressed namespace.
+check_entry() {
+    expected=$1
+    entry=$2
+    expected_entry_size=${3:-}
+
+    check_entry_shape_and_size "$expected" "$entry" "$expected_entry_size"
+
+    actual=$(sha256_of "$entry")
+    if test "$actual" != "$expected"; then
         printf 'store: CORRUPT %s\n' "$entry" >&2
         if test -n "$expected_entry_size"; then
             printf '  expected-size %s\n' "$expected_entry_size" >&2
@@ -140,11 +181,6 @@ check_entry() {
         printf '  recovery remove the entry, then explicitly admit verified bytes again\n' >&2
         exit 1
     fi
-    if test -w "$entry"; then
-        fail "WRITABLE $entry
-  expected $expected
-  a shared writable inode can change after verification"
-    fi
 }
 
 copy_candidate() {
@@ -152,7 +188,7 @@ copy_candidate() {
     expected=$2
     expected_size=$3
     test -f "$input" || fail "no such regular input file: $input"
-    input_size=$(wc -c <"$input" | tr -d ' ')
+    input_size=$(size_of "$input")
     test "$input_size" = "$expected_size" ||
         fail "input size does not match its descriptor
   expected $expected_size
@@ -166,7 +202,7 @@ copy_candidate() {
     # reading its byte stream rather than after filling a temporary.
     head -c "$expected_size" "$input" >"$tmp" ||
         fail "could not copy bounded candidate bytes from $input"
-    input_size=$(wc -c <"$input" | tr -d ' ')
+    input_size=$(size_of "$input")
     test "$input_size" = "$expected_size" ||
         fail "input changed size while its candidate was copied
   expected $expected_size
@@ -181,7 +217,7 @@ publish_candidate() {
     expected=$1
     expected_size=$2
 
-    actual_size=$(wc -c <"$tmp" | tr -d ' ')
+    actual_size=$(size_of "$tmp")
     test "$actual_size" = "$expected_size" ||
         fail "candidate size does not match its descriptor
   expected $expected_size
@@ -243,7 +279,7 @@ case "${1:-}" in
         test -n "$file" || fail 'usage: scripts/store.sh add FILE'
         test -f "$file" || fail "no such regular input file: $file"
         digest=$(sha256_of "$file")
-        bytes=$(wc -c <"$file" | tr -d ' ')
+        bytes=$(size_of "$file")
         copy_candidate "$file" "$digest" "$bytes"
         publish_candidate "$digest" "$bytes"
         printf '%s\n' "$digest"
@@ -323,6 +359,59 @@ case "${1:-}" in
         else
             printf 'store: copied and rehashed %s (the filesystem refused a link)\n' "$dest"
         fi
+        ;;
+
+    snapshot)
+        test "$#" -eq 4 ||
+            fail 'usage: scripts/store.sh snapshot DIGEST SIZE DEST'
+        digest=${2:-}
+        bytes=${3:-}
+        dest=${4:-}
+        is_digest "$digest" || fail "not a sha256 digest: ${digest:-<empty>}"
+        is_size "$bytes" || fail "not a canonical byte size: ${bytes:-<empty>}"
+        is_at_most "$bytes" 67108864 ||
+            fail "snapshot exceeds the 67108864-byte file-blob bound: $bytes"
+        test -n "$dest" || fail 'usage: scripts/store.sh snapshot DIGEST SIZE DEST'
+        source=$(path_of "$digest")
+
+        # Size is the I/O authority. Refuse an oversized digest-shaped object
+        # before hashing or copying it; then hash the bounded private copy
+        # rather than consuming the source pathname without an I/O cap.
+        check_entry_shape_and_size "$digest" "$source" "$bytes"
+        test ! -d "$dest" || fail "snapshot destination is a directory: $dest"
+        mkdir -p "$(dirname -- "$dest")"
+        tmp_dir=$(mktemp -d "$(dirname -- "$dest")/.kpm-incoming.XXXXXX") ||
+            fail "could not create a private snapshot directory beside $dest"
+        tmp=$tmp_dir/artifact
+        head -c "$((bytes + 1))" "$source" >"$tmp" ||
+            fail "could not copy the bounded store snapshot: $digest"
+        snapshot_size=$(size_of "$tmp")
+        test "$snapshot_size" = "$bytes" ||
+            fail "store entry changed size while snapshotting
+  expected $bytes
+  actual   $snapshot_size"
+        chmod 444 "$tmp"
+        snapshot_digest=$(sha256_of "$tmp")
+        test "$snapshot_digest" = "$digest" ||
+            fail "store entry changed while snapshotting
+  expected $digest
+  actual   $snapshot_digest"
+        mv -fT -- "$tmp" "$dest"
+        tmp=
+        rmdir "$tmp_dir"
+        tmp_dir=
+        final_size=$(size_of "$dest")
+        test "$final_size" = "$bytes" ||
+            fail "snapshot destination changed size at handoff
+  expected $bytes
+  actual   $final_size"
+        final_digest=$(sha256_of "$dest")
+        test "$final_digest" = "$digest" ||
+            fail "snapshot destination changed at handoff
+  expected $digest
+  actual   $final_digest"
+        test ! -w "$dest" || fail "snapshot destination is writable: $dest"
+        printf 'store: snapshotted and rehashed %s\n' "$dest"
         ;;
 
     verify)

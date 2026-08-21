@@ -553,6 +553,7 @@ for decision in \
     'Every later add, lookup, link/copy, or build handoff rehashes' \
     'package identities in one closure, including workspace' \
     'distinct identity/version pairs in one rough graph' \
+    'one lock v2 file' \
     'HTTP request/connection attempts in one fetch, including redirects and failures'
 do
     grep -Fq -- "$decision" "$fetch_adr" ||
@@ -1070,6 +1071,33 @@ test "$(file_digest "$(store_entry_for "$digest_b")")" = "$digest_b" ||
     fail 'a corrupted private copy changed its source store entry'
 rm -f "$handoff_dest"
 
+# A lock-declared size is an I/O bound, not merely a comparison after work.
+# Put a much larger digest-valid object in the store, then request a zero-byte
+# snapshot under a SHA spy. Size mismatch must stop before hash, copy, temp,
+# or destination visibility.
+dd if=/dev/zero of="$WORK/src/oversized" bs=1048576 count=2 2>/dev/null
+oversized_digest=$(store add "$WORK/src/oversized" 2>"$WORK/store.add-oversized")
+sha_bin="$WORK/sha-forbid-bin"
+sha_marker="$WORK/sha-forbid.called"
+mkdir -p "$sha_bin"
+cp "$ROOT/tests/pm/sha-forbid.sh" "$sha_bin/sha256sum"
+chmod +x "$sha_bin/sha256sum"
+if env PATH="$sha_bin:$PATH" KPM_SHA_MARKER="$sha_marker" \
+    sh "$store_tool" --store "$STORE" snapshot "$oversized_digest" 0 \
+    "$WORK/proj/oversized-snapshot" >"$WORK/store.oversized-snapshot" 2>&1
+then
+    fail 'a small lock descriptor snapshotted a much larger store object'
+fi
+grep -Fq 'size mismatch is refused before hashing' \
+    "$WORK/store.oversized-snapshot" ||
+    fail 'oversized store snapshot was not refused before digest work'
+test ! -e "$sha_marker" ||
+    fail 'oversized store snapshot hashed bytes after its size already mismatched'
+test ! -e "$WORK/proj/oversized-snapshot" ||
+    fail 'oversized store snapshot exposed a destination'
+test "$(find "$WORK/proj" -name '.kpm-incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'oversized store snapshot created a private copy before size refusal'
+
 # --- the three ways a store goes wrong, each named
 
 expect_store_refusal() {
@@ -1174,6 +1202,8 @@ grep -Fq 'could not enumerate every object' "$WORK/store.unreadable" ||
 
 store verify >"$WORK/store.final" 2>&1 ||
     fail "the store did not verify after the damage was undone: $(cat "$WORK/store.final")"
+
+sh "$ROOT/tests/pm/lock-v2.sh"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'
