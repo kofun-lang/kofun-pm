@@ -789,7 +789,60 @@ store_tool="$ROOT/scripts/store.sh"
 test -x "$store_tool" || fail 'the store tool is missing'
 
 STORE="$WORK/store"
-export KPM_STORE="$STORE"
+store() {
+    sh "$store_tool" --store "$STORE" "$@"
+}
+
+file_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum <"$1" | cut -d' ' -f1
+    else
+        shasum -a 256 <"$1" | cut -d' ' -f1
+    fi
+}
+
+store_entry_for() {
+    printf '%s/%s/%s\n' "$STORE" "$(printf '%s' "$1" | cut -c1-2)" \
+        "$(printf '%s' "$1" | cut -c3-)"
+}
+
+# HOME, XDG_CACHE_HOME, and a legacy KPM_STORE are not store authority. The
+# adapter must stop before touching any of them when --store is absent.
+if env -i PATH="$PATH" HOME="$WORK/ambient-home" \
+    XDG_CACHE_HOME="$WORK/ambient-cache" KPM_STORE="$WORK/ambient-store" \
+    sh "$store_tool" verify >"$WORK/store.ambient" 2>&1
+then
+    fail 'the store accepted ambient location authority without --store'
+fi
+grep -Fq -- '--store' "$WORK/store.ambient" ||
+    fail 'the missing explicit store input was not refused by name'
+test ! -e "$WORK/ambient-home" && test ! -e "$WORK/ambient-cache" &&
+    test ! -e "$WORK/ambient-store" ||
+    fail 'the store touched an ambient location before refusing it'
+if sh "$store_tool" --store relative verify >"$WORK/store.relative" 2>&1; then
+    fail 'the store accepted a relative mutation boundary'
+fi
+grep -Fq 'must be an absolute path' "$WORK/store.relative" ||
+    fail 'a relative store was not refused by name'
+if sh "$store_tool" --store / verify >"$WORK/store.root" 2>&1; then
+    fail 'the store accepted the filesystem root as its mutation boundary'
+fi
+grep -Fq 'refuses the filesystem root' "$WORK/store.root" ||
+    fail 'the filesystem-root store was not refused by name'
+if sh "$store_tool" --store /tmp/.. verify >"$WORK/store.root-dotdot" 2>&1; then
+    fail 'the store accepted a dot-segment alias of the filesystem root'
+fi
+grep -Fq 'refuses the filesystem root' "$WORK/store.root-dotdot" ||
+    fail 'a dot-segment root alias was not normalized and refused by name'
+ln -s / "$WORK/root-store-link"
+if sh "$store_tool" --store "$WORK/root-store-link" verify \
+    >"$WORK/store.root-symlink" 2>&1
+then
+    fail 'the store accepted a symlink alias of the filesystem root'
+fi
+grep -Fq 'refuses the filesystem root' "$WORK/store.root-symlink" ||
+    fail 'a symlink root alias was not resolved and refused by name'
+
 mkdir -p "$WORK/src"
 printf 'package alpha\n' >"$WORK/src/a"
 printf 'package beta\n' >"$WORK/src/b"
@@ -797,10 +850,11 @@ printf 'package beta\n' >"$WORK/src/b"
 # store, so this must not become a second entry.
 printf 'package alpha\n' >"$WORK/src/a-renamed"
 
-digest_a=$(sh "$store_tool" add "$WORK/src/a") ||
+digest_a=$(env -i PATH="$PATH" sh "$store_tool" --store "$STORE" \
+    add "$WORK/src/a" 2>"$WORK/store.add-a") ||
     fail 'the store could not accept a file'
-digest_b=$(sh "$store_tool" add "$WORK/src/b")
-digest_again=$(sh "$store_tool" add "$WORK/src/a-renamed")
+digest_b=$(store add "$WORK/src/b" 2>"$WORK/store.add-b")
+digest_again=$(store add "$WORK/src/a-renamed" 2>"$WORK/store.add-again")
 
 test "$digest_a" = "$digest_again" ||
     fail "the same bytes under another name produced a different digest:
@@ -809,21 +863,170 @@ stored=$(find "$STORE" -type f | wc -l | tr -d ' ')
 test "$stored" -eq 2 ||
     fail "three adds of two distinct contents produced $stored entries; the store is keyed by something other than content"
 
+# Admission is the fetch boundary: the declared size and digest are checked on
+# the completed temporary before any final name exists. Each refusal also has
+# to clean its temporary; an untrusted partial must never look like a winner.
+printf 'package gamma\n' >"$WORK/src/c"
+digest_c=$(file_digest "$WORK/src/c")
+bytes_c=$(wc -c <"$WORK/src/c" | tr -d ' ')
+wrong_size=$((bytes_c + 1))
+if store admit "$digest_c" "$wrong_size" "$WORK/src/c" \
+    >"$WORK/store.wrong-size" 2>&1
+then
+    fail 'store admission accepted a candidate with the wrong declared size'
+fi
+grep -Fq 'input size does not match its descriptor' "$WORK/store.wrong-size" ||
+    fail 'wrong-size admission was not refused by name'
+test ! -e "$(store_entry_for "$digest_c")" ||
+    fail 'wrong-size admission made a trusted final entry visible'
+
+zero_digest=0000000000000000000000000000000000000000000000000000000000000000
+if store admit "$zero_digest" "$bytes_c" "$WORK/src/c" \
+    >"$WORK/store.wrong-digest" 2>&1
+then
+    fail 'store admission accepted a candidate with the wrong declared digest'
+fi
+grep -Fq 'candidate digest does not match its descriptor' "$WORK/store.wrong-digest" ||
+    fail 'wrong-digest admission was not refused by name'
+test ! -e "$(store_entry_for "$zero_digest")" ||
+    fail 'wrong-digest admission made a trusted final entry visible'
+test "$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'a refused admission left an untrusted temporary behind'
+
+# TERM during a real bounded copy must never expose a final name. The trap
+# removes the partial candidate; the later manual-leftover case separately
+# proves verify catches the residue that an untrappable SIGKILL could leave.
+printf 'package interrupted\n' >"$WORK/src/interrupted"
+interrupt_digest=$(file_digest "$WORK/src/interrupted")
+interrupt_bytes=$(wc -c <"$WORK/src/interrupted" | tr -d ' ')
+head_bin="$WORK/head-delay-bin"
+head_marker="$WORK/head-delay.ready"
+mkdir -p "$head_bin"
+cp "$ROOT/tests/pm/head-delay.sh" "$head_bin/head"
+chmod +x "$head_bin/head"
+real_head=$(command -v head)
+env PATH="$head_bin:$PATH" KPM_REAL_HEAD="$real_head" \
+    KPM_HEAD_MARKER="$head_marker" \
+    sh "$store_tool" --store "$STORE" admit \
+    "$interrupt_digest" "$interrupt_bytes" "$WORK/src/interrupted" \
+    >"$WORK/store.interrupted.out" 2>"$WORK/store.interrupted.err" &
+interrupt_pid=$!
+attempt=0
+while ! test -f "$head_marker"; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 10 || {
+        kill -TERM "$interrupt_pid" 2>/dev/null || :
+        wait "$interrupt_pid" 2>/dev/null || :
+        fail 'the bounded copy never reached its observable interruption point'
+    }
+    sleep 1
+done
+kill -TERM "$interrupt_pid"
+if wait "$interrupt_pid"; then
+    fail 'a publisher interrupted during bounded copy reported success'
+fi
+test ! -e "$(store_entry_for "$interrupt_digest")" ||
+    fail 'an interrupted publisher exposed an unverified final entry'
+test "$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'a trappable interrupted publisher left its partial candidate behind'
+
+admitted_c=$(store admit "$digest_c" "$bytes_c" "$WORK/src/c" \
+    2>"$WORK/store.admit-c") || fail 'a matching descriptor was not admitted'
+test "$admitted_c" = "$digest_c" ||
+    fail 'successful admission did not return the verified digest'
+grep -Fq 'with create-if-absent' "$WORK/store.admit-c" ||
+    fail 'successful admission did not name its no-replace publication'
+
+# Install a directory symlink after the absence check but at the real ln call.
+# Exact-name publication must fail without creating a nested hard link outside
+# the explicitly supplied store boundary.
+printf 'package exact target\n' >"$WORK/src/exact"
+exact_digest=$(file_digest "$WORK/src/exact")
+exact_bytes=$(wc -c <"$WORK/src/exact" | tr -d ' ')
+exact_entry=$(store_entry_for "$exact_digest")
+exact_outside="$WORK/publication-outside"
+exact_bin="$WORK/ln-exact-bin"
+mkdir -p "$(dirname -- "$exact_entry")" "$exact_outside" "$exact_bin"
+cp "$ROOT/tests/pm/ln-barrier.sh" "$exact_bin/ln"
+chmod +x "$exact_bin/ln"
+real_ln=$(command -v ln)
+if env PATH="$exact_bin:$PATH" KPM_REAL_LN="$real_ln" \
+    KPM_LN_ATTACK_TARGET="$exact_entry" \
+    KPM_LN_ATTACK_OUTSIDE="$exact_outside" \
+    sh "$store_tool" --store "$STORE" admit \
+    "$exact_digest" "$exact_bytes" "$WORK/src/exact" \
+    >"$WORK/store.exact-target" 2>&1
+then
+    fail 'publication accepted a directory symlink installed at its final name'
+fi
+grep -Fq 'entry is not a regular file' "$WORK/store.exact-target" ||
+    fail 'the directory-symlink publication race was not refused by name'
+test "$(find "$exact_outside" -type f | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'publication created a nested hard link outside the store boundary'
+test "$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'the directory-symlink publication refusal left a temporary behind'
+rm -f "$exact_entry"
+
+# Force every publisher past its absence check before any real ln call. Exactly
+# one hard link may create the final name; every loser must rehash and adopt it.
+printf 'package delta\n' >"$WORK/src/d"
+digest_d=$(file_digest "$WORK/src/d")
+bytes_d=$(wc -c <"$WORK/src/d" | tr -d ' ')
+barrier="$WORK/ln-barrier"
+barrier_bin="$WORK/ln-barrier-bin"
+race="$WORK/store-race"
+mkdir -p "$barrier" "$barrier_bin" "$race"
+cp "$ROOT/tests/pm/ln-barrier.sh" "$barrier_bin/ln"
+chmod +x "$barrier_bin/ln"
+real_ln=$(command -v ln)
+race_pids=
+n=1
+while test "$n" -le 8; do
+    env PATH="$barrier_bin:$PATH" KPM_REAL_LN="$real_ln" \
+        KPM_LN_BARRIER="$barrier" KPM_LN_EXPECTED=8 \
+        sh "$store_tool" --store "$STORE" \
+        admit "$digest_d" "$bytes_d" "$WORK/src/d" \
+        >"$race/$n.out" 2>"$race/$n.err" &
+    race_pids="$race_pids $!"
+    n=$((n + 1))
+done
+race_failures=0
+for race_pid in $race_pids; do
+    wait "$race_pid" || race_failures=$((race_failures + 1))
+done
+test "$race_failures" -eq 0 ||
+    fail "$race_failures concurrent store publishers failed"
+test "$(find "$barrier" -type f -name 'caller.*' | wc -l | tr -d ' ')" -eq 8 ||
+    fail 'not every concurrent publisher reached atomic link publication'
+published=$(grep -l 'published .* create-if-absent' "$race"/*.err | wc -l | tr -d ' ')
+adopted=$(grep -l 'adopted .*winner' "$race"/*.err | wc -l | tr -d ' ')
+test "$published" -eq 1 && test "$adopted" -eq 7 ||
+    fail "concurrent publication produced $published publishers and $adopted adopters; expected 1 and 7"
+for race_output in "$race"/*.out; do
+    test "$(cat "$race_output")" = "$digest_d" ||
+        fail "a concurrent publisher returned something other than $digest_d"
+done
+entry_d=$(store path "$digest_d")
+test "$(file_digest "$entry_d")" = "$digest_d" ||
+    fail 'the concurrent winner does not hash to its final name'
+test "$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'concurrent publication left a temporary behind'
+
 # The path is the digest and nothing else. A name or a version in it would make
 # the same bytes two entries and would make the store's integrity depend on
 # metadata the bytes do not carry.
-entry_a=$(sh "$store_tool" path "$digest_a")
+entry_a=$(store path "$digest_a")
 test "$(printf '%s' "${entry_a#"$STORE"/}" | tr -d '/')" = "$digest_a" ||
     fail "the store path carries something other than the digest: $entry_a"
 
-sh "$store_tool" verify >"$WORK/store.verify" 2>&1 ||
+store verify >"$WORK/store.verify" 2>&1 ||
     fail "a freshly filled store did not verify: $(cat "$WORK/store.verify")"
 
 # Links rather than copies: the same inode, so ten projects sharing a
 # dependency store ten copies of nothing.
-sh "$store_tool" link "$digest_a" "$WORK/proj/a" >"$WORK/store.link" 2>&1 ||
+store link "$digest_a" "$WORK/proj/a" >"$WORK/store.link" 2>&1 ||
     fail "the store could not link an entry: $(cat "$WORK/store.link")"
-grep -q '^store: linked ' "$WORK/store.link" ||
+grep -q '^store: linked and rehashed ' "$WORK/store.link" ||
     fail "linking fell back to a copy on a filesystem that supports links:
 $(cat "$WORK/store.link")"
 links=$(( $(stat -c %h "$entry_a" 2>/dev/null || stat -f %l "$entry_a") ))
@@ -833,7 +1036,8 @@ test "$links" -ge 2 ||
 # And the fallback, forced. A fallback that is never exercised is a fallback
 # nobody knows is broken — this is the path taken across filesystems and on
 # filesystems without hard links at all.
-KPM_NO_HARDLINK=1 sh "$store_tool" link "$digest_b" "$WORK/proj/b" \
+KPM_NO_HARDLINK=1 sh "$store_tool" --store "$STORE" \
+    link "$digest_b" "$WORK/proj/b" \
     >"$WORK/store.copy" 2>&1 ||
     fail "the copy fallback failed: $(cat "$WORK/store.copy")"
 grep -q 'the filesystem refused a link' "$WORK/store.copy" ||
@@ -843,11 +1047,34 @@ cmp "$WORK/src/b" "$WORK/proj/b" ||
 test ! -w "$WORK/proj/b" ||
     fail 'a copied dependency is writable; a project that edits it in place makes its lock a description of something else'
 
+# The destination is a second trust boundary. Corrupt a forced private copy
+# immediately after its exact-name handoff; the post-handoff rehash must refuse
+# even though the pre-handoff hash was correct.
+mv_bin="$WORK/mv-corrupt-bin"
+handoff_dest="$WORK/proj/handoff-corrupt"
+mkdir -p "$mv_bin"
+cp "$ROOT/tests/pm/mv-corrupt.sh" "$mv_bin/mv"
+chmod +x "$mv_bin/mv"
+real_mv=$(command -v mv)
+if env PATH="$mv_bin:$PATH" KPM_REAL_MV="$real_mv" \
+    KPM_MV_CORRUPT_DEST="$handoff_dest" KPM_NO_HARDLINK=1 \
+    sh "$store_tool" --store "$STORE" link "$digest_b" "$handoff_dest" \
+    >"$WORK/store.handoff-corrupt" 2>&1
+then
+    fail 'materialization accepted a destination corrupted at handoff'
+fi
+grep -Fq 'materialized destination changed before handoff' \
+    "$WORK/store.handoff-corrupt" ||
+    fail 'post-handoff destination corruption was not caught by rehash'
+test "$(file_digest "$(store_entry_for "$digest_b")")" = "$digest_b" ||
+    fail 'a corrupted private copy changed its source store entry'
+rm -f "$handoff_dest"
+
 # --- the three ways a store goes wrong, each named
 
 expect_store_refusal() {
     label=$1; needle=$2
-    if sh "$store_tool" verify >"$WORK/store.bad" 2>&1; then
+    if store verify >"$WORK/store.bad" 2>&1; then
         fail "$label: the store verified when it should not have"
     fi
     grep -Fq -- "$needle" "$WORK/store.bad" ||
@@ -861,6 +1088,36 @@ $(sed 's/^/    /' "$WORK/store.bad")"
 chmod 644 "$entry_a"
 printf 'tampered\n' >"$entry_a"
 chmod 444 "$entry_a"
+if store path "$digest_a" >"$WORK/store.corrupt-path" 2>&1; then
+    fail 'lookup returned a digest-shaped path without rehashing its bytes'
+fi
+grep -Fq 'store: CORRUPT' "$WORK/store.corrupt-path" ||
+    fail 'lookup did not name corruption found at its use boundary'
+if store link "$digest_a" "$WORK/proj/corrupt-source" \
+    >"$WORK/store.corrupt-link" 2>&1
+then
+    fail 'materialization used a corrupt store entry'
+fi
+grep -Fq 'store: CORRUPT' "$WORK/store.corrupt-link" ||
+    fail 'materialization did not rehash its source before use'
+test ! -e "$WORK/proj/corrupt-source" ||
+    fail 'materialization exposed a destination from a corrupt source entry'
+winner_inode_before=$(stat -c %i "$entry_a" 2>/dev/null || stat -f %i "$entry_a")
+bytes_a=$(wc -c <"$WORK/src/a" | tr -d ' ')
+if store admit "$digest_a" "$bytes_a" "$WORK/src/a" \
+    >"$WORK/store.corrupt-winner" 2>&1
+then
+    fail 'admission silently replaced a corrupt existing winner'
+fi
+grep -Fq 'store: CORRUPT' "$WORK/store.corrupt-winner" ||
+    fail 'a corrupt existing winner was not rehashed and named'
+grep -Fq 'recovery remove the entry' "$WORK/store.corrupt-winner" ||
+    fail 'a corrupt existing winner did not name its recovery action'
+winner_inode_after=$(stat -c %i "$entry_a" 2>/dev/null || stat -f %i "$entry_a")
+test "$winner_inode_before" = "$winner_inode_after" ||
+    fail 'a refused admission replaced the corrupt winner inode'
+test "$(cat "$entry_a")" = tampered ||
+    fail 'a refused admission changed the corrupt winner bytes'
 expect_store_refusal 'a corrupted entry was not named' 'store: CORRUPT'
 grep -Fq "  expected $digest_a" "$WORK/store.bad" ||
     fail 'the corruption report does not say what the entry should have been'
@@ -882,11 +1139,45 @@ touch "$STORE/$(printf '%s' "$digest_b" | cut -c1-2)/leftover.incoming.1"
 expect_store_refusal 'an interrupted write was not reported' 'interrupted write'
 rm -f "$STORE"/*/leftover.incoming.1
 
-sh "$store_tool" verify >"$WORK/store.final" 2>&1 ||
+# A digest-looking symlink is not an entry. Verification must enumerate it and
+# refuse rather than follow it or ignore it.
+symlink_entry=$(store_entry_for "$zero_digest")
+ln -s "$WORK/src/a" "$symlink_entry"
+expect_store_refusal 'a symlink entry was not reported' 'store: NOT_REGULAR'
+rm -f "$symlink_entry"
+
+# Special files and directories at digest positions wedge admission just as a
+# symlink does, so a green verify must enumerate and reject them too.
+fifo_digest=1111111111111111111111111111111111111111111111111111111111111111
+fifo_entry=$(store_entry_for "$fifo_digest")
+mkdir -p "$(dirname -- "$fifo_entry")"
+mkfifo "$fifo_entry"
+expect_store_refusal 'a FIFO entry was ignored' 'store: NOT_REGULAR'
+rm -f "$fifo_entry"
+directory_digest=2222222222222222222222222222222222222222222222222222222222222222
+directory_entry=$(store_entry_for "$directory_digest")
+mkdir -p "$(dirname -- "$directory_entry")" "$directory_entry"
+expect_store_refusal 'a directory at a digest position was ignored' 'store: NOT_REGULAR'
+rmdir "$directory_entry"
+
+# A partial inventory is not a verified store. In particular, find failure
+# must not disappear behind sort/wc and report a false-green zero-entry shard.
+unreadable_shard=$(dirname -- "$(store_entry_for "$digest_b")")
+chmod 000 "$unreadable_shard"
+if store verify >"$WORK/store.unreadable" 2>&1; then
+    chmod 755 "$unreadable_shard"
+    fail 'verify reported success after failing to enumerate a shard'
+fi
+chmod 755 "$unreadable_shard"
+grep -Fq 'could not enumerate every object' "$WORK/store.unreadable" ||
+    fail 'an unreadable shard was refused without naming incomplete enumeration'
+
+store verify >"$WORK/store.final" 2>&1 ||
     fail "the store did not verify after the damage was undone: $(cat "$WORK/store.final")"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'
 printf 'pm: dependencies are links into the store, with a copy when the filesystem refuses: PASS\n'
 printf 'pm: corruption names the entry, the expected digest, and the actual one: PASS\n'
+printf 'pm: admission verifies descriptors; one concurrent publisher wins without overwrite: PASS\n'
 printf 'pm: reference and C11 agree; bytes hold under hostile TZ, locale, env -i: PASS\n'
 printf 'pm: the static fetch contract pins metadata; only fetch has network authority: PASS\n'

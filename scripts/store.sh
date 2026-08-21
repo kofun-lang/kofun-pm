@@ -3,10 +3,11 @@ set -eu
 
 # The content-addressed store.
 #
-#   scripts/store.sh path DIGEST        where that digest lives
-#   scripts/store.sh add FILE           place it, print its digest
-#   scripts/store.sh link DIGEST DEST   put it in a project, without copying
-#   scripts/store.sh verify             every entry still hashes to its name
+#   scripts/store.sh --store /abs/path path DIGEST
+#   scripts/store.sh --store /abs/path add FILE
+#   scripts/store.sh --store /abs/path admit DIGEST SIZE FILE
+#   scripts/store.sh --store /abs/path link DIGEST DEST
+#   scripts/store.sh --store /abs/path verify
 #
 # pnpm's insight: a package version is immutable, so its bytes are its name.
 # An entry's path is derived from its digest and from nothing else — no package
@@ -28,16 +29,31 @@ set -eu
 #   `verify` is a gate rather than a subcommand. A store whose integrity is
 #   only checked when someone remembers is a store whose integrity is unknown.
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-
-# The store location is an input, not a discovery. A tool that picks a
-# directory by looking around is a tool that uses a different one under cron.
-STORE=${KPM_STORE:-"${XDG_CACHE_HOME:-$HOME/.cache}/kofun/store"}
-
 fail() {
     printf 'store: %s\n' "$*" >&2
     exit 1
 }
+
+# The store location is an explicit input, not a discovery. In particular,
+# HOME and XDG_CACHE_HOME are not authority to mutate a directory. The future
+# CLI carries this as --store, and the shell adapter deliberately has no
+# environment or home-directory fallback.
+test "${1:-}" = --store ||
+    fail 'usage: scripts/store.sh --store ABSOLUTE_STORE COMMAND ...'
+STORE=${2:-}
+test -n "$STORE" || fail '--store requires an absolute path'
+case $STORE in
+    /*) ;;
+    *) fail "--store must be an absolute path: $STORE" ;;
+esac
+test "$STORE" != / || fail '--store refuses the filesystem root'
+case $STORE in
+    */) fail "--store must not end in '/': $STORE" ;;
+esac
+STORE=$(realpath -m -- "$STORE") ||
+    fail "could not resolve the store mutation boundary: $STORE"
+test "$STORE" != / || fail '--store refuses the filesystem root'
+shift 2
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -69,51 +85,197 @@ path_of() {
         "$(printf '%s' "$1" | cut -c3-)"
 }
 
+is_size() {
+    case $1 in
+        *[!0-9]* | '') return 1 ;;
+        0) return 0 ;;
+        0*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+tmp=
+tmp_dir=
+cleanup() {
+    if test -n "$tmp"; then
+        rm -f "$tmp"
+        tmp=
+    fi
+    if test -n "$tmp_dir"; then
+        rmdir "$tmp_dir" 2>/dev/null || :
+        tmp_dir=
+    fi
+}
+trap cleanup 0
+trap 'cleanup; exit 1' 1 2 15
+
+# Rehash at every use. A digest-shaped path, existence, and mode are not proof
+# that the bytes still match. Symlinks and other non-regular objects are never
+# store entries because following one would move verification outside the
+# content-addressed namespace.
+check_entry() {
+    expected=$1
+    entry=$2
+    expected_entry_size=${3:-}
+
+    if test -L "$entry" || ! test -f "$entry"; then
+        fail "entry is not a regular file: $entry
+  expected $expected
+  recovery remove the object, then explicitly admit verified bytes again"
+    fi
+
+    actual_entry_size=$(wc -c <"$entry" | tr -d ' ')
+    actual=$(sha256_of "$entry")
+    if { test -n "$expected_entry_size" &&
+            test "$actual_entry_size" != "$expected_entry_size"; } ||
+        test "$actual" != "$expected"
+    then
+        printf 'store: CORRUPT %s\n' "$entry" >&2
+        if test -n "$expected_entry_size"; then
+            printf '  expected-size %s\n' "$expected_entry_size" >&2
+            printf '  actual-size   %s\n' "$actual_entry_size" >&2
+        fi
+        printf '  expected %s\n' "$expected" >&2
+        printf '  actual   %s\n' "$actual" >&2
+        printf '  recovery remove the entry, then explicitly admit verified bytes again\n' >&2
+        exit 1
+    fi
+    if test -w "$entry"; then
+        fail "WRITABLE $entry
+  expected $expected
+  a shared writable inode can change after verification"
+    fi
+}
+
+copy_candidate() {
+    input=$1
+    expected=$2
+    expected_size=$3
+    test -f "$input" || fail "no such regular input file: $input"
+    input_size=$(wc -c <"$input" | tr -d ' ')
+    test "$input_size" = "$expected_size" ||
+        fail "input size does not match its descriptor
+  expected $expected_size
+  actual   $input_size"
+    candidate_target=$(path_of "$expected")
+    mkdir -p "$(dirname -- "$candidate_target")"
+    tmp=$(mktemp "$candidate_target.incoming.XXXXXX") ||
+        fail "could not create a unique temporary beside $candidate_target"
+    # Do not write beyond an untrusted declared bound. The shell adapter is a
+    # Linux gate; the native transport will enforce the same limit while
+    # reading its byte stream rather than after filling a temporary.
+    head -c "$expected_size" "$input" >"$tmp" ||
+        fail "could not copy bounded candidate bytes from $input"
+    input_size=$(wc -c <"$input" | tr -d ' ')
+    test "$input_size" = "$expected_size" ||
+        fail "input changed size while its candidate was copied
+  expected $expected_size
+  actual   $input_size"
+}
+
+# The candidate already lives on the store filesystem. Verify its declared
+# descriptor, then publish with hard-link create-if-absent semantics: link(2)
+# creates the final name atomically and refuses EEXIST without replacing the
+# winner. Plain mv/rename is intentionally absent from this path.
+publish_candidate() {
+    expected=$1
+    expected_size=$2
+
+    actual_size=$(wc -c <"$tmp" | tr -d ' ')
+    test "$actual_size" = "$expected_size" ||
+        fail "candidate size does not match its descriptor
+  expected $expected_size
+  actual   $actual_size"
+    actual=$(sha256_of "$tmp")
+    test "$actual" = "$expected" ||
+        fail "candidate digest does not match its descriptor
+  expected $expected
+  actual   $actual"
+
+    target=$(path_of "$expected")
+    mkdir -p "$(dirname -- "$target")"
+    chmod 444 "$tmp"
+
+    if test -e "$target" || test -L "$target"; then
+        check_entry "$expected" "$target" "$expected_size"
+        printf 'store: adopted verified winner %s\n' "$expected" >&2
+        cleanup
+        return
+    fi
+
+    # -T is essential: without it, a directory or directory symlink installed
+    # at the final name during this race makes ln create a nested name instead
+    # of applying link(2) to the exact final name.
+    if ln -T -- "$tmp" "$target" 2>/dev/null; then
+        # Rehash the final name too. This is deliberately more than trusting
+        # that link(2) named the inode we supplied.
+        check_entry "$expected" "$target" "$expected_size"
+        printf 'store: published %s with create-if-absent\n' "$expected" >&2
+        cleanup
+        return
+    fi
+
+    # EEXIST is the normal concurrent-loser path. Any other failure while the
+    # target is still absent means this filesystem cannot provide the required
+    # primitive; never fall back to an overwriting rename.
+    if test -e "$target" || test -L "$target"; then
+        check_entry "$expected" "$target" "$expected_size"
+        printf 'store: adopted concurrent winner %s\n' "$expected" >&2
+        cleanup
+        return
+    fi
+    fail "atomic create-if-absent publication is unavailable for $target"
+}
+
 case "${1:-}" in
     path)
+        test "$#" -eq 2 || fail 'usage: scripts/store.sh path DIGEST'
         digest=${2:-}
         is_digest "$digest" || fail "not a sha256 digest: ${digest:-<empty>}"
-        path_of "$digest"
+        entry=$(path_of "$digest")
+        check_entry "$digest" "$entry"
+        printf '%s\n' "$entry"
         ;;
 
     add)
+        test "$#" -eq 2 || fail 'usage: scripts/store.sh add FILE'
         file=${2:-}
         test -n "$file" || fail 'usage: scripts/store.sh add FILE'
-        test -f "$file" || fail "no such file: $file"
-
+        test -f "$file" || fail "no such regular input file: $file"
         digest=$(sha256_of "$file")
-        target=$(path_of "$digest")
+        bytes=$(wc -c <"$file" | tr -d ' ')
+        copy_candidate "$file" "$digest" "$bytes"
+        publish_candidate "$digest" "$bytes"
+        printf '%s\n' "$digest"
+        ;;
 
-        if test -e "$target"; then
-            # Already present, and its name is its content, so there is
-            # nothing to compare and nothing to overwrite. Re-adding the same
-            # bytes is not an update — it is a no-op, and that is the whole
-            # reason ten projects share one copy.
-            printf '%s\n' "$digest"
-            exit 0
-        fi
-
-        mkdir -p "$(dirname -- "$target")"
-        # Write beside the target and move into place, so a store entry never
-        # exists half-written under its final name. A reader that found one
-        # would have no way to tell it from corruption.
-        tmp="$target.incoming.$$"
-        cat "$file" >"$tmp"
-        chmod 444 "$tmp"
-        mv "$tmp" "$target"
+    admit)
+        test "$#" -eq 4 || fail 'usage: scripts/store.sh admit DIGEST SIZE FILE'
+        digest=${2:-}
+        bytes=${3:-}
+        file=${4:-}
+        is_digest "$digest" || fail "not a sha256 digest: ${digest:-<empty>}"
+        is_size "$bytes" || fail "not a canonical byte size: ${bytes:-<empty>}"
+        test -n "$file" || fail 'usage: scripts/store.sh admit DIGEST SIZE FILE'
+        copy_candidate "$file" "$digest" "$bytes"
+        publish_candidate "$digest" "$bytes"
         printf '%s\n' "$digest"
         ;;
 
     link)
+        test "$#" -eq 3 || fail 'usage: scripts/store.sh link DIGEST DEST'
         digest=${2:-}
         dest=${3:-}
         is_digest "$digest" || fail "not a sha256 digest: ${digest:-<empty>}"
         test -n "$dest" || fail 'usage: scripts/store.sh link DIGEST DEST'
         source=$(path_of "$digest")
-        test -f "$source" || fail "not in the store: $digest"
+        check_entry "$digest" "$source"
+        test ! -d "$dest" || fail "materialization destination is a directory: $dest"
 
         mkdir -p "$(dirname -- "$dest")"
-        rm -f "$dest"
+        tmp_dir=$(mktemp -d "$(dirname -- "$dest")/.kpm-incoming.XXXXXX") ||
+            fail "could not create a private materialization directory beside $dest"
+        tmp=$tmp_dir/artifact
 
         # A hard link costs nothing and shares the bytes. It is refused across
         # filesystems, and on filesystems that do not have hard links at all —
@@ -123,20 +285,48 @@ case "${1:-}" in
         #
         # KPM_NO_HARDLINK forces the fallback, because a fallback that is never
         # exercised is a fallback nobody knows is broken.
-        if test "${KPM_NO_HARDLINK:-0}" != 1 && ln "$source" "$dest" 2>/dev/null
+        if test "${KPM_NO_HARDLINK:-0}" != 1
         then
-            printf 'store: linked %s\n' "$dest"
+            if ln -T -- "$source" "$tmp" 2>/dev/null; then
+                materialization=linked
+            else
+                cat "$source" >"$tmp"
+                materialization=copied
+            fi
         else
-            cp "$source" "$dest"
-            # The copy is read-only for the same reason the entry is, even
-            # though it is no longer shared: a project that can edit its
-            # dependency in place is a project whose lock stops describing it.
-            chmod 444 "$dest"
-            printf 'store: copied %s (the filesystem refused a link)\n' "$dest"
+            cat "$source" >"$tmp"
+            materialization=copied
+        fi
+
+        chmod 444 "$tmp"
+        materialized_digest=$(sha256_of "$tmp")
+        test "$materialized_digest" = "$digest" ||
+            fail "materialized bytes changed before handoff
+  expected $digest
+  actual   $materialized_digest"
+        # As with publication, a directory at the destination must not make
+        # the tool write a nested name. The private 0700 directory also means
+        # link failure never opens a reusable public pathname for the copy.
+        mv -fT -- "$tmp" "$dest"
+        tmp=
+        rmdir "$tmp_dir"
+        tmp_dir=
+        final_digest=$(sha256_of "$dest")
+        test "$final_digest" = "$digest" ||
+            fail "materialized destination changed before handoff
+  expected $digest
+  actual   $final_digest"
+        test ! -w "$dest" || fail "materialized destination is writable: $dest"
+
+        if test "$materialization" = linked; then
+            printf 'store: linked and rehashed %s\n' "$dest"
+        else
+            printf 'store: copied and rehashed %s (the filesystem refused a link)\n' "$dest"
         fi
         ;;
 
     verify)
+        test "$#" -eq 1 || fail 'usage: scripts/store.sh verify'
         test -d "$STORE" || fail "no store at $STORE"
         work=$(mktemp -d "${TMPDIR:-/tmp}/kpm-verify.XXXXXX")
         trap 'rm -rf "$work"' 0 1 2 15
@@ -146,12 +336,31 @@ case "${1:-}" in
 
         # Every entry, in a stable order, so two runs of `verify` produce the
         # same report and a difference between them means the store changed.
-        find "$STORE" -type f ! -name '*.incoming.*' | LC_ALL=C sort >"$work/entries"
+        find "$STORE" ! -path "$STORE" \
+            \( ! -type d -o \
+            ! -path "$STORE/[0123456789abcdef][0123456789abcdef]" \) \
+            ! -name '*.incoming.*' >"$work/entries.unsorted" ||
+            fail "could not enumerate every object under $STORE"
+        LC_ALL=C sort <"$work/entries.unsorted" >"$work/entries"
 
         while IFS= read -r entry; do
             entries=$((entries + 1))
+            if test -L "$entry" || ! test -f "$entry"; then
+                printf 'store: NOT_REGULAR %s\n' "$entry" >&2
+                printf '  store entries cannot be symlinks or special files\n' >&2
+                bad=$((bad + 1))
+                continue
+            fi
             # The name the path claims, reassembled from the two levels.
             claimed=$(printf '%s' "${entry#"$STORE"/}" | tr -d '/')
+            if ! is_digest "$claimed" ||
+                test "$(path_of "$claimed")" != "$entry"
+            then
+                printf 'store: MALFORMED %s\n' "$entry" >&2
+                printf '  an entry path must be the exact two-level sha256 layout\n' >&2
+                bad=$((bad + 1))
+                continue
+            fi
             actual=$(sha256_of "$entry")
             if test "$claimed" != "$actual"; then
                 # Named, not counted. "The store is corrupt" tells an operator
@@ -177,7 +386,10 @@ case "${1:-}" in
         # A leftover half-written file is not corruption of an entry — nothing
         # claims it — but it is evidence a write was interrupted, and a store
         # that quietly accumulates them is one nobody is watching.
-        incoming=$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')
+        find "$STORE" ! -path "$STORE" -name '*.incoming.*' \
+            >"$work/incoming" ||
+            fail "could not enumerate interrupted writes under $STORE"
+        incoming=$(wc -l <"$work/incoming" | tr -d ' ')
         if test "$incoming" -ne 0; then
             printf 'store: %s interrupted write(s) left behind\n' "$incoming" >&2
             bad=$((bad + 1))

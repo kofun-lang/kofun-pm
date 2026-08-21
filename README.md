@@ -192,8 +192,19 @@ filesystems without hard links at all. `KPM_NO_HARDLINK=1` forces it, because a
 fallback that is never exercised is a fallback nobody knows is broken — the
 gate takes both paths on every run.
 
-**What is not here yet:** *every lock entry is present* needs P4. There is no
-fetch, so nothing has arrived to be present.
+Store location is explicit: the shell adapter requires `--store` and does not
+derive mutation authority from `HOME`, `XDG_CACHE_HOME`, or `KPM_STORE`.
+Admission copies into a unique temporary beside the final entry, checks the
+declared size and SHA-256, and uses a hard link for atomic create-if-absent
+publication. One of eight barrier-synchronized publishers wins; every loser
+rehashes and adopts that winner. A corrupt winner is named and never replaced.
+Lookup, link, and copy paths rehash before use, and a materialized destination
+is rehashed again.
+
+**What is not here yet:** *every lock entry is present* still needs lock v2 and
+fetch. Shell cannot yet prove the affine same-open-file-description handoff ADR
+7 requires, so verified no-replace admission is a landed slice, not a claim
+that the complete store/fetch boundary is finished.
 
 ### 5. Fetch is explicit; everything after it is offline
 
@@ -204,12 +215,13 @@ It verifies metadata and every file before writing lock v2;
 `lock`, `verify`, resolution, and build have no network mode at all.
 
 The P4 implementation will make files arrive individually by digest rather
-than inside an archive. This makes
-the first fetch chattier, but removes archive traversal, symlinks, executable
+than inside an archive. This makes the first fetch chattier, but removes
+archive traversal, symlinks, executable
 bits, decompression bombs, and install hooks from the protocol. ADR 7 requires
 no-replace store publication, winner rehash, and a same-handle handoff; the
-current shell store does not yet satisfy those properties and #14 remains open
-until executable evidence does.
+v0.4.0 shell store now gates descriptor verification, no-replace publication,
+concurrent winner rehash, and corrupt-winner non-overwrite. Same-handle handoff,
+fetch, lock v2, and offline build evidence remain, so #14 stays open.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
