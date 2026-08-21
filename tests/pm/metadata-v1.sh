@@ -420,6 +420,8 @@ tree_state "$WORK/hostile-home" "$WORK/hostile-xdg" >"$WORK/ambient.before"
 env -i PATH="$WORK/network-bin:$PATH" HOME="$WORK/hostile-home" \
 XDG_CACHE_HOME="$WORK/hostile-xdg" KPM_STORE="$WORK/ambient-store" \
 KPM_NETWORK_SENTINEL="$WORK/network.called" \
+KPM_METADATA_DESCRIPTOR=1 KPM_METADATA_SIZE=ambient-invalid \
+KPM_METADATA_DIGEST=ambient-invalid \
 http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
 ALL_PROXY=socks5://127.0.0.1:9 \
     "$TOOL" inspect "$ID" "$VERSION" "$WORK/metadata" \
@@ -427,6 +429,8 @@ ALL_PROXY=socks5://127.0.0.1:9 \
 if env -i PATH="$WORK/network-bin:$PATH" HOME="$WORK/hostile-home" \
     XDG_CACHE_HOME="$WORK/hostile-xdg" KPM_STORE="$WORK/ambient-store" \
     KPM_NETWORK_SENTINEL="$WORK/network.called" \
+    KPM_METADATA_DESCRIPTOR=1 KPM_METADATA_SIZE=ambient-invalid \
+    KPM_METADATA_DIGEST=ambient-invalid \
     http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
     ALL_PROXY=socks5://127.0.0.1:9 \
     "$TOOL" inspect "$ID" "$VERSION" "$WORK/same-size-corrupt.metadata" \

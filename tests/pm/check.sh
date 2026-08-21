@@ -1283,6 +1283,7 @@ sh "$ROOT/tests/pm/lock-v2.sh"
 sh "$ROOT/tests/pm/catalog-v1.sh"
 sh "$ROOT/tests/pm/metadata-v1.sh"
 sh "$ROOT/tests/pm/fetch-artifact-v1.sh"
+sh "$ROOT/tests/pm/fetch-metadata-v1.sh"
 sh "$ROOT/tests/pm/lock-tool-v2.sh"
 sh "$ROOT/tests/pm/rough-graph-v2.sh"
 

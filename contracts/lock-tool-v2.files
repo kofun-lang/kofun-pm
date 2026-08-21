@@ -7,12 +7,15 @@ scripts/catalog-v1-validate.awk
 scripts/catalog-v1.sh
 scripts/fetch-artifact-v1-validate.awk
 scripts/fetch-artifact-v1.sh
+scripts/fetch-metadata-v1.sh
 scripts/lock-tool-v2.sh
 scripts/lock-v2-structure.sh
 scripts/lock-v2-validate.awk
 scripts/lock-v2.sh
 scripts/lock.sh
+scripts/metadata-descriptor-v1-validate.awk
 scripts/metadata-request-v1-validate.awk
+scripts/metadata-v1-plan.sh
 scripts/metadata-v1-validate.awk
 scripts/metadata-v1.sh
 scripts/protocol-v1-validate.awk

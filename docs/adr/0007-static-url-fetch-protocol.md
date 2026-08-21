@@ -427,6 +427,30 @@ properties, the exact response-idle interval, and the complete-fetch deadline
 require the complete transport helper or native #1577 and remain mandatory
 before this action can become `kpm fetch`.
 
+#### Current supplied-catalog metadata acquisition
+
+The v0.13.0 shell checkpoint composes the strict supplied authority/catalog
+plan, v0.12.0 pinned artifact qualification, content-addressed store, and strict
+metadata parser for one exact identity/version. `scripts/fetch-metadata-v1.sh`
+accepts the authority/catalog paths, pinned IPv4, CA file, and store, but no
+caller-supplied origin, target, class, size, or digest. It derives those values
+from the one private catalog plan, with class fixed to metadata and the request
+target fixed to the identity path plus
+`@kofun/v1/versions/<version>.meta`.
+
+The adapter captures all child success, independently snapshots and rehashes
+the admitted store object, and exposes one success only after strict metadata
+identity/version/dependency/file parsing finishes. A valid warm object skips
+the transfer but not that parse. Descriptor-valid grammar-invalid bytes may
+remain read-only and unreferenced in CAS; no graph or lock success follows.
+
+This still begins with a supplied catalog and explicit pinned peer. It does not
+establish catalog acquisition, authenticity/history/non-equivocation,
+DNS/public-address selection, redirect handling, the normative response-header
+and pre-body `Content-Length` bounds, dependency traversal, file-blob
+acquisition, lock writing, or same-handle consumption. It is therefore one
+metadata acquisition edge, not the complete transport or `kpm fetch`.
+
 ### 9. Store publication is verify, then create-if-absent
 
 Fetched bytes are streamed into a unique temporary on the final entry's
@@ -558,9 +582,11 @@ duplicate content under two identities, wrong/truncated bytes, interruption,
 concurrent no-replace publication, corrupt-winner recovery, v1/v2 migration,
 and a network-denied lock/verify/build after one successful fetch.
 
-Issue #20/v0.12.0 supplies only the pinned single-artifact qualification above;
-it does not discharge any of the complete acquisition, DNS/redirect/header,
-graph, lock, recovery, or offline-consumer evidence in this list.
+Issue #20/v0.12.0 supplies only the pinned single-artifact qualification above.
+Issue #21/v0.13.0 binds one supplied catalog descriptor to one derived metadata
+request and strict parse. Neither discharges catalog acquisition/provenance,
+the complete DNS/redirect/header transport, transitive metadata/file graph,
+lock, recovery, or offline-consumer evidence in this list.
 
 ## Current Kofun implementation boundary
 

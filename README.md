@@ -316,6 +316,34 @@ exact 64-KiB/256-field/8-KiB-line header bounds or its pre-body
 `Content-Length` check, so v0.12.0 does not claim the general ADR transport or
 complete #14's live-acquisition acceptance.
 
+v0.13.0 composes that qualification with one supplied authority/catalog plan
+and the strict metadata parser:
+
+```
+scripts/fetch-metadata-v1.sh acquire IDENTITY VERSION \
+  --catalog CATALOG \
+  --authority AUTHORITY \
+  --ipv4 A.B.C.D \
+  --ca-file CA_PEM \
+  --store ABSOLUTE_STORE
+```
+
+The caller cannot supply an origin, request target, artifact class, size, or
+digest. One bounded read-once catalog plan approves the identity origin and
+exact version row, then the adapter derives the identity-path metadata target
+and passes only that descriptor to the pinned fetcher. It withholds both child
+and top-level success until the admitted CAS object is independently
+snapshotted, rehashed, and strictly parsed for the requested identity/version.
+A descriptor-valid but grammar-invalid document may remain as an unreferenced
+read-only CAS object; it never becomes graph or lock success. A valid warm
+object performs no transfer but still passes the same snapshot and parser.
+
+This is one descriptor-bound metadata acquisition, not catalog acquisition or
+complete package fetch. Catalog provenance/history, DNS/public-address policy,
+redirects, the ADR response-header and pre-body `Content-Length` bounds, file
+blobs, graph/MVS construction, lock writing, and same-handle consumption remain
+outside it, so #14 remains open.
+
 **What is not here yet:** producing a complete lock still needs manifest
 parsing, the lock v2 writer, live catalog/metadata/blob acquisition and its
 complete DNS/redirect/header-bounded transport, authentication, and fetch. For a supplied
@@ -356,7 +384,9 @@ requirements, lock, and store snapshots. v0.11.0 additionally refuses a lock
 whose tool header does not name the exact current local implementation closure.
 v0.12.0 qualifies only one already-described response against an explicitly
 pinned endpoint and verified no-replace store admission; it does not derive or
-traverse a package protocol input.
+traverse a package protocol input. v0.13.0 derives one exact metadata request
+from one supplied approved catalog plan and parses the admitted object, but it
+still does not acquire the catalog or traverse dependencies and file blobs.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -494,6 +524,9 @@ v0.12.0 adds the pinned single-artifact validator and adapter to that same
 tool closure. Changing its scalar grammar, hermetic curl profile, response
 checks, or success-only store admission therefore moves the tool identity even
 though the qualification remains outside the public package-fetch boundary.
+v0.13.0 adds the descriptor-bound metadata wrapper and the factored private
+metadata-plan adapter. Their catalog-to-request derivation, success withholding,
+store resnapshot, or strict parse boundary therefore also moves that identity.
 
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
@@ -549,7 +582,9 @@ requirements/lock/store carries exactly its reachable rough metadata graph and
 semantic MVS result. v0.11.0 binds that proof to the exact current local tool
 closure and clean Kofun gitlink. v0.12.0 adds a pinned descriptor-known HTTPS
 response/store qualification without claiming catalog or package acquisition.
-P4 still has to connect those checks to the complete header-bounded
+v0.13.0 binds one supplied catalog descriptor to one derived metadata request,
+store resnapshot, and strict parse without claiming catalog acquisition or the
+package graph. P4 still has to connect those checks to the complete header-bounded
 DNS/redirect transport, authenticated acquisition, file blobs, the manifest, a
 writer, and offline consumers before making the complete v2 claim.
 
