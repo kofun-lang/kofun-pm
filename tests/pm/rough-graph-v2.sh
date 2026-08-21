@@ -4,6 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 TOOL=$ROOT/scripts/rough-graph-v2.sh
 REQUIREMENTS_TOOL=$ROOT/scripts/requirements-v2-plan.sh
+TOOL_IDENTITY_TOOL=$ROOT/scripts/lock-tool-v2.sh
 STORE_TOOL=$ROOT/scripts/store.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/kofun-pm-rough-graph-test.XXXXXX")
 trap 'rm -rf "$WORK"' 0 1 2 15
@@ -21,6 +22,92 @@ sha256() {
     fi
 }
 
+BASE_PATH=$PATH
+REAL_GIT=$(command -v git)
+HOSTILE_BIN=$WORK/network-bin
+HOSTILE_HOME=$WORK/hostile-home
+HOSTILE_XDG=$WORK/hostile-xdg
+mkdir -p "$HOSTILE_BIN" "$HOSTILE_HOME" "$HOSTILE_XDG"
+printf 'home\n' >"$HOSTILE_HOME/marker"
+printf 'xdg\n' >"$HOSTILE_XDG/marker"
+for network_command in curl wget fetch ftp sftp ssh nc ncat netcat telnet \
+    openssl host dig nslookup getent
+do
+    cp "$ROOT/tests/pm/network-sentinel.sh" "$HOSTILE_BIN/$network_command"
+done
+cp "$ROOT/tests/pm/git-readonly-sentinel.sh" "$HOSTILE_BIN/git"
+chmod +x "$HOSTILE_BIN"/*
+
+ROOT_INDEX=$(git -C "$ROOT" rev-parse --git-path index)
+case $ROOT_INDEX in /*) ;; *) ROOT_INDEX=$ROOT/$ROOT_INDEX ;; esac
+VENDOR_INDEX=$(git -C "$ROOT/vendor/kofun" rev-parse --git-path index)
+case $VENDOR_INDEX in
+    /*) ;;
+    *) VENDOR_INDEX=$ROOT/vendor/kofun/$VENDOR_INDEX ;;
+esac
+CLOSURE_MANIFEST=$ROOT/contracts/lock-tool-v2.files
+
+state() {
+    for path do
+        stat -c '%n %d %i %h %F %a %s' "$path"
+        test ! -f "$path" || sha256 <"$path"
+    done
+}
+
+tree_state() {
+    find "$@" -printf '%p %D %i %n %y %m %s\n' | LC_ALL=C sort
+    find "$@" -type f -exec sha256sum '{}' ';' | LC_ALL=C sort
+}
+
+scope_state() {
+    requirements_path=$1
+    lock_path=$2
+    store_path=$3
+    output=$4
+    {
+        for path in "$requirements_path" "$lock_path"; do
+            test -e "$path" || test -L "$path" || continue
+            state "$path"
+        done
+        test ! -d "$store_path" || tree_state "$store_path"
+        while IFS= read -r relative; do
+            state "$ROOT/$relative"
+        done <"$CLOSURE_MANIFEST"
+        state "$ROOT_INDEX" "$VENDOR_INDEX"
+        tree_state "$HOSTILE_HOME" "$HOSTILE_XDG"
+    } >"$output"
+}
+
+hostile_rough() {
+    hostile_path=$HOSTILE_BIN:$BASE_PATH
+    test -z "${KPM_EXTRA_PATH:-}" ||
+        hostile_path=$KPM_EXTRA_PATH:$hostile_path
+    env -i PATH="$hostile_path" HOME="$HOSTILE_HOME" \
+    XDG_CACHE_HOME="$HOSTILE_XDG" KPM_STORE="$WORK/ambient-store" \
+    KPM_NETWORK_SENTINEL="$WORK/network.called" \
+    KPM_WATCH_STORE="${KPM_WATCH_STORE:-}" \
+    KPM_STORE_CALLED="${KPM_STORE_CALLED:-}" \
+    KPM_REAL_GIT="$REAL_GIT" KPM_GIT_ROOT="$ROOT" \
+    GIT_DIR="$WORK/hostile.git" GIT_WORK_TREE="$WORK/hostile.worktree" \
+    GIT_INDEX_FILE=/dev/null GIT_OBJECT_DIRECTORY="$WORK/hostile.objects" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES="$WORK/hostile.alternates" \
+    GIT_COMMON_DIR="$WORK/hostile.common" GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=core.fileMode GIT_CONFIG_VALUE_0=false \
+    GIT_TRACE="$WORK/git.trace" GIT_TRACE2_EVENT="$WORK/git-trace2.event" \
+    http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
+    ALL_PROXY=socks5://127.0.0.1:9 \
+        "$TOOL" "$@"
+}
+
+hostile_requirements() {
+    env -i PATH="$HOSTILE_BIN:$BASE_PATH" HOME="$HOSTILE_HOME" \
+    XDG_CACHE_HOME="$HOSTILE_XDG" KPM_STORE="$WORK/ambient-store" \
+    KPM_NETWORK_SENTINEL="$WORK/network.called" \
+    http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
+    ALL_PROXY=socks5://127.0.0.1:9 \
+        "$REQUIREMENTS_TOOL" "$@"
+}
+
 store() {
     sh "$STORE_TOOL" --store "$STORE" "$@"
 }
@@ -33,11 +120,12 @@ write_lock() {
     body=$1
     requirements=$2
     output=$3
+    tool=${4:-$TOOL_DIGEST}
     covered=$output.covered
     {
         printf '# format: kofun-pm.lock/v2\n'
         printf '# columns: typed rows: package identity state version | metadata identity version size sha256 | file identity version path kind size sha256\n'
-        printf '# tool: %s\n' "$D0"
+        printf '# tool: %s\n' "$tool"
         printf '# requirements: %s\n' "$(sha256 <"$requirements")"
         sed -n '1,$p' "$body"
     } >"$covered"
@@ -54,25 +142,38 @@ expect_refusal() {
     requirements=$3
     lock=$4
     store_path=$5
-    if "$TOOL" inspect "$requirements" "$lock" --store "$store_path" \
+    scope_state "$requirements" "$lock" "$store_path" \
+        "$WORK/refusal.before"
+    rm -f "$WORK/network.called" "$WORK/git.trace" "$WORK/git-trace2.event"
+    if hostile_rough inspect "$requirements" "$lock" --store "$store_path" \
         >"$WORK/refusal.out" 2>&1
     then
         fail "$label was accepted"
     fi
     grep -Fq -- "$needle" "$WORK/refusal.out" ||
         fail "$label did not say '$needle': $(sed -n '1,12p' "$WORK/refusal.out" | tr '\n' ' ')"
-    if grep -Eq '^rough-graph-v2: exact supplied|root requirement\(s\)|reachable remote identity/version pair\(s\)' \
+    if grep -Eq '^rough-graph-v2: exact |root requirement\(s\)|reachable remote identity/version pair\(s\)' \
         "$WORK/refusal.out"
     then
         fail "$label emitted partial success or graph counts"
     fi
+    test ! -e "$WORK/network.called" && test ! -e "$WORK/ambient-store" &&
+        test ! -e "$WORK/git.trace" && test ! -e "$WORK/git-trace2.event" ||
+        fail "$label used network, ambient store, or ambient Git tracing"
+    scope_state "$requirements" "$lock" "$store_path" \
+        "$WORK/refusal.after"
+    cmp "$WORK/refusal.before" "$WORK/refusal.after" ||
+        fail "$label mutated repository, requirements, lock, store, or HOME/XDG state"
 }
 
 expect_requirements_refusal() {
     label=$1
     needle=$2
     requirements=$3
-    if "$REQUIREMENTS_TOOL" inspect "$requirements" \
+    scope_state "$requirements" "$WORK/no-lock" "$WORK/no-store" \
+        "$WORK/requirements-refusal.before"
+    rm -f "$WORK/network.called"
+    if hostile_requirements inspect "$requirements" \
         >"$WORK/requirements-refusal.out" 2>&1
     then
         fail "$label was accepted"
@@ -82,13 +183,59 @@ expect_requirements_refusal() {
     if grep -q '^requirements[[:space:]]' "$WORK/requirements-refusal.out"; then
         fail "$label emitted a partial normalized plan"
     fi
+    test ! -e "$WORK/network.called" && test ! -e "$WORK/ambient-store" ||
+        fail "$label used network or an ambient store"
+    scope_state "$requirements" "$WORK/no-lock" "$WORK/no-store" \
+        "$WORK/requirements-refusal.after"
+    cmp "$WORK/requirements-refusal.before" \
+        "$WORK/requirements-refusal.after" ||
+        fail "$label mutated repository, requirements, or HOME/XDG state"
 }
 
-test -x "$TOOL" && test -x "$REQUIREMENTS_TOOL" ||
-    fail 'rough-graph/requirements adapters are not executable'
+expect_pre_tool_refusal() {
+    label=$1
+    needle=$2
+    requirements=$3
+    lock=$4
+    store_path=$5
+    scope_state "$requirements" "$lock" "$store_path" \
+        "$WORK/pre-tool-refusal.before"
+    rm -f "$WORK/tool-git.called" "$WORK/network.called"
+    if env -i PATH="$WORK/git-forbid:$HOSTILE_BIN:$BASE_PATH" HOME="$HOSTILE_HOME" \
+        XDG_CACHE_HOME="$HOSTILE_XDG" KPM_STORE="$WORK/ambient-store" \
+        KPM_NETWORK_SENTINEL="$WORK/tool-git.called" \
+        http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
+        ALL_PROXY=socks5://127.0.0.1:9 \
+        "$TOOL" inspect "$requirements" "$lock" --store "$store_path" \
+        >"$WORK/pre-tool-refusal.out" 2>&1
+    then
+        fail "$label was accepted"
+    fi
+    grep -Fq -- "$needle" "$WORK/pre-tool-refusal.out" ||
+        fail "$label did not preserve its earlier diagnostic: $(sed -n '1,8p' "$WORK/pre-tool-refusal.out" | tr '\n' ' ')"
+    test ! -e "$WORK/tool-git.called" && test ! -e "$WORK/network.called" ||
+        fail "$label invoked the local tool/Git identity or network before its precedence point"
+    if grep -Eq '^rough-graph-v2: exact |root requirement\(s\)|reachable remote identity/version pair\(s\)' \
+        "$WORK/pre-tool-refusal.out"
+    then
+        fail "$label emitted a partial graph plan, count, or success boundary"
+    fi
+    test ! -e "$WORK/ambient-store" ||
+        fail "$label used an ambient store"
+    scope_state "$requirements" "$lock" "$store_path" \
+        "$WORK/pre-tool-refusal.after"
+    cmp "$WORK/pre-tool-refusal.before" "$WORK/pre-tool-refusal.after" ||
+        fail "$label mutated repository, requirements, lock, store, or HOME/XDG state"
+}
+
+test -x "$TOOL" && test -x "$REQUIREMENTS_TOOL" &&
+    test -x "$TOOL_IDENTITY_TOOL" ||
+    fail 'rough-graph/requirements/tool-identity adapters are not executable'
 
 TAB=$(printf '\t')
 D0=0000000000000000000000000000000000000000000000000000000000000000
+TOOL_DIGEST=$(sh "$TOOL_IDENTITY_TOOL" digest) ||
+    fail 'the current lock-v2 tool identity could not be computed'
 ID_A=https://a.example/pkg/
 ID_B=https://b.example/pkg/
 ID_C=https://c.example/pkg/
@@ -97,6 +244,9 @@ V_A=1.2.0
 V_B=1.0.0
 STORE=$WORK/store
 mkdir -p "$STORE" "$WORK/objects"
+mkdir -p "$WORK/git-forbid"
+cp "$ROOT/tests/pm/network-sentinel.sh" "$WORK/git-forbid/git"
+chmod +x "$WORK/git-forbid/git"
 
 printf 'alpha bytes\n' >"$WORK/objects/a.bin"
 printf 'beta bytes\n' >"$WORK/objects/b.bin"
@@ -140,12 +290,29 @@ size_meta_b=$(wc -c <"$WORK/objects/meta-b" | tr -d ' ')
 } >"$WORK/body"
 write_lock "$WORK/body" "$WORK/requirements" "$WORK/lock"
 
+# Requirements grammar, lock structure/self-digest, and the exact requirements
+# digest all precede invocation of the current local tool/Git closure.
+printf 'wrong\n' >"$WORK/pre-tool-bad.requirements"
+expect_pre_tool_refusal 'malformed requirements before tool identity' \
+    'first line is not exactly kofun-pm.requirements/v2' \
+    "$WORK/pre-tool-bad.requirements" "$WORK/missing.lock" "$WORK/missing-store"
+printf 'wrong\n' >"$WORK/pre-tool-bad.lock"
+expect_pre_tool_refusal 'malformed lock before tool identity' \
+    "first header is not '# format: kofun-pm.lock/v2'" \
+    "$WORK/requirements" "$WORK/pre-tool-bad.lock" "$STORE"
+sed 's/^# tool: ./# tool: f/' "$WORK/lock" >"$WORK/pre-tool-self.lock"
+expect_pre_tool_refusal 'lock self-digest before tool identity' \
+    'lock digest does not cover its preceding bytes' \
+    "$WORK/requirements" "$WORK/pre-tool-self.lock" "$STORE"
+
 "$TOOL" inspect "$WORK/requirements" "$WORK/lock" --store "$STORE" \
     >"$WORK/valid.out"
 grep -Fq '1 root requirement(s), 1 workspace member(s), 2 reachable remote identity/version pair(s), 2 selected remote identity(ies), 3 total requirement/dependency edge row(s)' \
     "$WORK/valid.out" || fail 'valid graph did not report exact complete counts'
-grep -Fq 'supplied offline snapshots only' "$WORK/valid.out" ||
-    fail 'valid graph omitted its supplied/offline boundary'
+grep -Fq 'exact current tool closure and supplied requirements/lock/store rough graph passed' \
+    "$WORK/valid.out" || fail 'valid graph omitted its exact tool-closure binding'
+grep -Fq 'supplied offline graph inputs and current local tool closure only' \
+    "$WORK/valid.out" || fail 'valid graph omitted its supplied/offline boundary'
 grep -Fq 'manifest parsing, catalog authenticity/history/non-equivocation' \
     "$WORK/valid.out" || fail 'valid graph overstated its boundary'
 
@@ -250,6 +417,9 @@ test "$(wc -c <"$WORK/digest-mismatch.requirements" | tr -d ' ')" = \
     "$(wc -c <"$WORK/requirements" | tr -d ' ')" ||
     fail 'requirements digest fixture changed size'
 mkdir -p "$WORK/empty-store"
+expect_pre_tool_refusal 'requirements digest mismatch does not invoke tool identity' \
+    'lock requirements digest does not match the supplied requirements bytes' \
+    "$WORK/digest-mismatch.requirements" "$WORK/lock" "$WORK/empty-store"
 expect_refusal 'requirements digest mismatch before store' \
     'lock requirements digest does not match the supplied requirements bytes' \
     "$WORK/digest-mismatch.requirements" "$WORK/lock" "$WORK/empty-store"
@@ -259,6 +429,34 @@ grep -Fq "  expected $(sha256 <"$WORK/requirements")" "$WORK/refusal.out" &&
 if grep -Fq 'metadata object is missing or corrupt' "$WORK/refusal.out"; then
     fail 'requirements digest mismatch opened a store object'
 fi
+
+# The current local tool closure is bound after the exact requirements digest
+# and before any lock-named store object is opened. Re-sign the outer lock so a
+# wrong canonical tool digest reaches that distinct check.
+write_lock "$WORK/body" "$WORK/requirements" "$WORK/tool-mismatch.lock" "$D0"
+mkdir -p "$WORK/store-head-spy"
+real_store_head=$(command -v head)
+{
+    printf '#!/bin/sh\nset -eu\n'
+    printf 'input=$(readlink "/proc/$$/fd/0" 2>/dev/null || :)\n'
+    printf 'case "$input" in "$KPM_WATCH_STORE"/*) : >"$KPM_STORE_CALLED" ;; esac\n'
+    printf 'exec "%s" "$@"\n' "$real_store_head"
+} >"$WORK/store-head-spy/head"
+chmod +x "$WORK/store-head-spy/head"
+rm -f "$WORK/store.called"
+KPM_EXTRA_PATH="$WORK/store-head-spy" KPM_STORE_CALLED="$WORK/store.called" \
+KPM_WATCH_STORE="$STORE" \
+expect_refusal 'tool digest mismatch before store' \
+    'lock tool digest does not match the current local tool closure' \
+    "$WORK/requirements" "$WORK/tool-mismatch.lock" "$STORE"
+grep -Fq "  expected $D0" "$WORK/refusal.out" &&
+    grep -Fq "  actual   $TOOL_DIGEST" "$WORK/refusal.out" ||
+    fail 'tool mismatch omitted exact recorded/current values'
+if grep -Fq 'metadata object is missing or corrupt' "$WORK/refusal.out"; then
+    fail 'tool digest mismatch opened a store object'
+fi
+test ! -e "$WORK/store.called" ||
+    fail 'tool digest mismatch invoked the store snapshot adapter'
 
 # Missing reachable pairs and unreachable retained metadata are distinct. A
 # higher retained version never substitutes for an exact missing minimum.
@@ -466,13 +664,8 @@ cp "$WORK/lock" "$WORK/option-lock/-"
     sed -n '1,$p' "$WORK/roots-1024.requirements"
     printf 'root\thttps://r1024.example/pkg/\t1.0.0\n'
 } >"$WORK/roots-1025.requirements"
-if "$REQUIREMENTS_TOOL" inspect "$WORK/roots-1025.requirements" \
-    >"$WORK/roots-1025.out" 2>&1
-then
-    fail '1025 root requirements were accepted'
-fi
-grep -Fq 'root requirement count exceeds 1024' "$WORK/roots-1025.out" ||
-    fail 'root +1 refusal did not name its semantic bound'
+expect_requirements_refusal 'root requirement count +1' \
+    'root requirement count exceeds 1024' "$WORK/roots-1025.requirements"
 
 {
     printf 'kofun-pm.requirements/v2\n'
@@ -500,13 +693,8 @@ test "$(wc -l <"$WORK/rows-17409.requirements" | tr -d ' ')" = 17409 ||
     sed -n '1,$p' "$WORK/rows-17409.requirements"
     printf 'unknown\n'
 } >"$WORK/rows-17410.requirements"
-if "$REQUIREMENTS_TOOL" inspect "$WORK/rows-17410.requirements" \
-    >"$WORK/rows-17410.out" 2>&1
-then
-    fail '17410 requirements rows were accepted'
-fi
-grep -Fq 'exceeds the 17409-row structural bound' "$WORK/rows-17410.out" ||
-    fail 'requirements row +1 refusal did not precede grammar'
+expect_requirements_refusal 'requirements row bound +1' \
+    'exceeds the 17409-row structural bound' "$WORK/rows-17410.requirements"
 
 {
     printf 'kofun-pm.requirements/v2\n'
@@ -516,60 +704,44 @@ grep -Fq 'exceeds the 17409-row structural bound' "$WORK/rows-17410.out" ||
         n=$((n + 1))
     done
 } >"$WORK/members-1025.requirements"
-if "$REQUIREMENTS_TOOL" inspect "$WORK/members-1025.requirements" \
-    >"$WORK/members-1025.out" 2>&1
-then
-    fail '1025 workspace members were accepted'
-fi
-grep -Fq 'workspace member count exceeds 1024' "$WORK/members-1025.out" ||
-    fail 'workspace member +1 refusal did not name its semantic bound'
+expect_requirements_refusal 'workspace member count +1' \
+    'workspace member count exceeds 1024' "$WORK/members-1025.requirements"
 
 {
     head -c 8192 /dev/zero | tr '\000' x
     printf '\n'
 } >"$WORK/line-8192.requirements"
-if "$REQUIREMENTS_TOOL" inspect "$WORK/line-8192.requirements" \
-    >"$WORK/line-8192.out" 2>&1
-then
-    fail 'grammar-invalid exact 8192-byte line was accepted'
-fi
+expect_requirements_refusal 'exact requirements line bound reaches grammar' \
+    'first line is not exactly kofun-pm.requirements/v2' \
+    "$WORK/line-8192.requirements"
 grep -Fq 'first line is not exactly kofun-pm.requirements/v2' \
-    "$WORK/line-8192.out" || fail 'exact line bound did not reach later grammar'
-if grep -Fq 'line exceeds the 8192-byte structural bound' "$WORK/line-8192.out"; then
+    "$WORK/requirements-refusal.out" || fail 'exact line bound did not reach later grammar'
+if grep -Fq 'line exceeds the 8192-byte structural bound' \
+    "$WORK/requirements-refusal.out"
+then
     fail 'exact 8192-byte requirements line was treated as overbound'
 fi
 {
     head -c 8193 /dev/zero | tr '\000' x
     printf '\n'
 } >"$WORK/line-8193.requirements"
-if "$REQUIREMENTS_TOOL" inspect "$WORK/line-8193.requirements" \
-    >"$WORK/line-8193.out" 2>&1
-then
-    fail '8193-byte requirements line was accepted'
-fi
-grep -Fq 'line exceeds the 8192-byte structural bound' "$WORK/line-8193.out" ||
-    fail 'requirements line +1 refusal was not named'
+expect_requirements_refusal 'requirements line bound +1' \
+    'line exceeds the 8192-byte structural bound' \
+    "$WORK/line-8193.requirements"
 dd if=/dev/zero of="$WORK/bytes-exact.requirements" bs=1 count=0 \
     seek=70254592 2>/dev/null
-if "$REQUIREMENTS_TOOL" inspect "$WORK/bytes-exact.requirements" \
-    >"$WORK/bytes-exact.out" 2>&1
+expect_requirements_refusal 'exact requirements byte bound reaches grammar' \
+    'byte outside ASCII, HT, and LF' "$WORK/bytes-exact.requirements"
+if grep -Fq 'exceeds the 70254592-byte input bound' \
+    "$WORK/requirements-refusal.out"
 then
-    fail 'grammar-invalid exact requirements byte bound was accepted'
-fi
-grep -Fq 'byte outside ASCII, HT, and LF' "$WORK/bytes-exact.out" ||
-    fail 'exact requirements byte bound did not reach later byte grammar'
-if grep -Fq 'exceeds the 70254592-byte input bound' "$WORK/bytes-exact.out"; then
     fail 'exact requirements byte bound was treated as overbound'
 fi
 dd if=/dev/zero of="$WORK/bytes-over.requirements" bs=1 count=0 \
     seek=70254593 2>/dev/null
-if "$REQUIREMENTS_TOOL" inspect "$WORK/bytes-over.requirements" \
-    >"$WORK/bytes-over.out" 2>&1
-then
-    fail 'requirements byte bound +1 was accepted'
-fi
-grep -Fq 'exceeds the 70254592-byte input bound: 70254593' \
-    "$WORK/bytes-over.out" || fail 'requirements byte +1 refusal was not exact'
+expect_requirements_refusal 'requirements byte bound +1' \
+    'exceeds the 70254592-byte input bound: 70254593' \
+    "$WORK/bytes-over.requirements"
 
 # The closure edge limit is additive across root, member, and every parsed
 # remote dependency row. At exactly 16,384 it proceeds to graph comparison;
@@ -700,57 +872,21 @@ test "$(sed -n '1p' "$WORK/lock.count")" = 1 ||
     fail 'lock pathname was not read exactly once'
 cp "$WORK/lock.saved" "$WORK/lock"
 
-# Success and refusal are offline and read-only under hostile ambient state.
-state() {
-    for path do
-        stat -c '%n %d %i %h %F %a %s' "$path"
-        test ! -f "$path" || sha256 <"$path"
-    done
-}
-tree_state() {
-    find "$@" -printf '%p %D %i %n %y %m %s\n' | LC_ALL=C sort
-    find "$@" -type f -exec sha256sum '{}' ';' | LC_ALL=C sort
-}
-mkdir -p "$WORK/network-bin" "$WORK/hostile-home" "$WORK/hostile-xdg"
-printf 'home\n' >"$WORK/hostile-home/marker"
-printf 'xdg\n' >"$WORK/hostile-xdg/marker"
-for network_command in curl wget fetch ftp sftp ssh nc ncat netcat telnet \
-    openssl git host dig nslookup getent
-do
-    cp "$ROOT/tests/pm/network-sentinel.sh" "$WORK/network-bin/$network_command"
-done
-chmod +x "$WORK/network-bin"/*
-state "$WORK/requirements" "$WORK/lock" >"$WORK/explicit.before"
-tree_state "$STORE" "$WORK/hostile-home" "$WORK/hostile-xdg" \
-    >"$WORK/tree.before"
-env -i PATH="$WORK/network-bin:$PATH" HOME="$WORK/hostile-home" \
-XDG_CACHE_HOME="$WORK/hostile-xdg" KPM_STORE="$WORK/ambient-store" \
-KPM_NETWORK_SENTINEL="$WORK/network.called" \
-http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
-ALL_PROXY=socks5://127.0.0.1:9 \
-    "$TOOL" inspect "$WORK/requirements" "$WORK/lock" --store "$STORE" \
+# Success is covered separately; every refusal above already runs under the
+# same hostile env-i helpers and checks its complete in-scope state before and
+# after the call.
+scope_state "$WORK/requirements" "$WORK/lock" "$STORE" \
+    "$WORK/offline.before"
+rm -f "$WORK/network.called" "$WORK/git.trace" "$WORK/git-trace2.event"
+hostile_rough inspect "$WORK/requirements" "$WORK/lock" --store "$STORE" \
     >"$WORK/offline.out"
-if env -i PATH="$WORK/network-bin:$PATH" HOME="$WORK/hostile-home" \
-    XDG_CACHE_HOME="$WORK/hostile-xdg" KPM_STORE="$WORK/ambient-store" \
-    KPM_NETWORK_SENTINEL="$WORK/network.called" \
-    http_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
-    ALL_PROXY=socks5://127.0.0.1:9 \
-    "$TOOL" inspect "$WORK/missing.requirements" "$WORK/missing.lock" \
-    --store "$STORE" >"$WORK/offline-refusal.out" 2>&1
-then
-    fail 'hostile-environment missing graph pair was accepted'
-fi
-grep -Fq "reachable metadata is missing from lock: $ID_C@1.0.0" \
-    "$WORK/offline-refusal.out" || fail 'hostile refusal missed graph comparison'
-test ! -e "$WORK/network.called" || fail 'rough-graph inspector attempted network'
-test ! -e "$WORK/ambient-store" || fail 'rough-graph inspector used ambient KPM_STORE'
-state "$WORK/requirements" "$WORK/lock" >"$WORK/explicit.after"
-tree_state "$STORE" "$WORK/hostile-home" "$WORK/hostile-xdg" \
-    >"$WORK/tree.after"
-cmp "$WORK/explicit.before" "$WORK/explicit.after" ||
-    fail 'rough-graph success/refusal mutated requirements or lock input'
-cmp "$WORK/tree.before" "$WORK/tree.after" ||
-    fail 'rough-graph success/refusal mutated store or ambient HOME/XDG state'
+test ! -e "$WORK/network.called" && test ! -e "$WORK/ambient-store" &&
+    test ! -e "$WORK/git.trace" && test ! -e "$WORK/git-trace2.event" ||
+    fail 'rough-graph inspector used network, ambient store, or ambient Git tracing'
+scope_state "$WORK/requirements" "$WORK/lock" "$STORE" \
+    "$WORK/offline.after"
+cmp "$WORK/offline.before" "$WORK/offline.after" ||
+    fail 'rough-graph success mutated repository, explicit inputs, store, or HOME/XDG state'
 
 printf 'pm: requirements v2 grammar, digest precedence, and literal paths: PASS\n'
 printf 'pm: exact rough-graph reachability, workspace exclusion, and missing/extra pairs: PASS\n'

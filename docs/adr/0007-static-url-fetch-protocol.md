@@ -265,6 +265,39 @@ preceding byte, including its final LF. The v2 tool identity uses domain
 metadata and lock parsers, store admission, build wiring, and the exact clean
 Kofun gitlink.
 
+The canonical local shell closure is the exact strict path inventory in
+`contracts/lock-tool-v2.files`. That manifest names itself and
+`scripts/lock-tool-v2.sh` exactly once, has at most 64 unique
+repository-relative paths in identity-byte order, permits at most 512 printable
+ASCII bytes per path, and ends in LF. No path component may be a symlink. Each
+named regular file is opened once into a private snapshot, is at most 8 MiB,
+and contributes to a 64 MiB aggregate ceiling. The identity is SHA-256 over:
+
+```text
+kofun-pm.lock-tool/v2
+file\t<repository-relative-path>\t<size>\t<sha256>
+...
+gitlink\tvendor/kofun\t<object-id>
+```
+
+The file rows follow manifest order and the framing ends in LF. The manifest
+includes the declared native CLI capability surface because those authority
+signatures are build wiring even while native action binding is blocked. It
+also includes the frozen lock-v1 reader because every v2-capable tool must
+retain that reader and its explicit migration boundary. Neither inclusion
+claims that native action binding or v1-to-v2 migration is implemented.
+
+The gitlink is exactly one stage-0 mode-160000 index entry. The checked-out
+`vendor/kofun` HEAD must equal its object id and its tracked tree, including
+mode changes, must be clean. The bounded tracked-index inspection rejects
+assume-unchanged, skip-worktree, and other non-canonical entry flags before the
+tree comparison. Staged and unstaged dirt are checked separately with plumbing
+status operations that do not execute repository-configured content filters.
+These are five local read-only Git operations with optional locks disabled;
+ambient repository/index/object/config/trace redirection and object replacement
+are disabled before Git runs. Git lazy fetching of missing promisor objects is
+also disabled. The closure computation has no network or mutation authority.
+
 The requirements digest is SHA-256 over this complete canonical byte framing:
 
 ```text
@@ -293,13 +326,14 @@ limits remain authoritative.
 
 A supplied offline graph checkpoint validates in this order: requirements
 framing/grammar/bounds; lock framing/self-digest/complete row grammar; exact
-requirements digest; every retained metadata snapshot and selected-file
-relation; workspace package equality; missing reachable exact pairs;
-unreachable retained pairs; and selected package/max-version equality. It
-emits no graph plan or counts until all stages pass. Success counts root and
-member rows, distinct reachable non-workspace `(identity, version)` pairs,
-selected non-workspace identities, and every root/member/remote dependency
-edge row before reachability deduplication.
+requirements digest; the current canonical local tool closure and exact lock
+tool digest; every retained metadata snapshot and selected-file relation;
+workspace package equality; missing reachable exact pairs; unreachable
+retained pairs; and selected package/max-version equality. It emits no graph
+plan or counts until all stages pass. Success counts root and member rows,
+distinct reachable non-workspace `(identity, version)` pairs, selected
+non-workspace identities, and every root/member/remote dependency edge row
+before reachability deduplication.
 Workspace paths and the network authority file are not included: neither is a
 resolution input or lock identity. Member identities and requirements are.
 

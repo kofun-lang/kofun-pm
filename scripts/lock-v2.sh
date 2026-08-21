@@ -9,18 +9,20 @@ set -eu
 #   scripts/lock-v2.sh graph-plan LOCK --store /abs/path \
 #     --requirements-digest DIGEST
 #
-# Neither action is named plain `verify`: catalog/history binding, dependency
-# reachability and re-resolution, tool/requirements identity, and the v2
-# writer/migration/fetch path are later slices. `audit-store` is sequential,
+# Neither public action is named plain `verify`: catalog/history binding,
+# dependency reachability and re-resolution, tool/requirements identity, and
+# the v2 writer/migration/fetch path are later slices. `audit-store` is sequential,
 # not an atomic snapshot or same-open-file-description handoff. A partial
 # verifier must say which boundary it proves instead of returning success
 # under the complete command name. `graph-plan` is an internal composition
-# adapter: it withholds machine rows until the full lock-scoped inspection
-# passes and is consumed only by rough-graph-v2.sh.
+# adapter: it also binds the supplied requirements and current local tool
+# closure, withholds machine rows until the full lock-scoped inspection passes,
+# and is consumed only by rough-graph-v2.sh.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STORE_TOOL=$ROOT/scripts/store.sh
 STRUCTURE_TOOL=$ROOT/scripts/lock-v2-structure.sh
+TOOL_IDENTITY_TOOL=$ROOT/scripts/lock-tool-v2.sh
 PROTOCOL_VALIDATOR=$ROOT/scripts/protocol-v1-validate.awk
 METADATA_VALIDATOR=$ROOT/scripts/metadata-v1-validate.awk
 MAX_LINE_BYTES=4096
@@ -91,6 +93,17 @@ if test "$ACTION" = graph-plan; then
         fail "lock requirements digest does not match the supplied requirements bytes
   expected $lock_requirements
   actual   $EXPECTED_REQUIREMENTS"
+    test -x "$TOOL_IDENTITY_TOOL" ||
+        fail "lock-v2 tool identity adapter is missing: $TOOL_IDENTITY_TOOL"
+    lock_tool=$(LC_ALL=C awk -F "$tab" '$1 == "lock" { print $5 }' \
+        "$work/objects")
+    test -n "$lock_tool" || fail 'lock plan did not retain its tool digest'
+    current_tool=$(sh "$TOOL_IDENTITY_TOOL" digest) ||
+        fail 'could not compute the current local lock-v2 tool closure identity'
+    test "$lock_tool" = "$current_tool" ||
+        fail "lock tool digest does not match the current local tool closure
+  expected $lock_tool
+  actual   $current_tool"
 fi
 objects=0
 metadata_objects=0

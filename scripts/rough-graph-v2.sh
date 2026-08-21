@@ -46,6 +46,6 @@ LC_ALL=C awk -f "$VALIDATOR" "$work/requirements.plan" "$work/lock.plan" \
 IFS="$tab" read -r record roots members remote_pairs selected edges <"$work/summary"
 test "$record" = summary || fail 'rough-graph validator returned no complete summary'
 
-printf 'rough-graph-v2: exact supplied requirements/lock/store rough graph passed: %s root requirement(s), %s workspace member(s), %s reachable remote identity/version pair(s), %s selected remote identity(ies), %s total requirement/dependency edge row(s)\n' \
+printf 'rough-graph-v2: exact current tool closure and supplied requirements/lock/store rough graph passed: %s root requirement(s), %s workspace member(s), %s reachable remote identity/version pair(s), %s selected remote identity(ies), %s total requirement/dependency edge row(s)\n' \
     "$roots" "$members" "$remote_pairs" "$selected" "$edges"
-printf 'rough-graph-v2: supplied offline snapshots only; manifest parsing, catalog authenticity/history/non-equivocation, acquisition, complete tool identity, store publication, lock writer/migration/replacement, fetch, atomic global inventory, build wiring, and affine same-handle consumption remain outside this slice\n'
+printf 'rough-graph-v2: supplied offline graph inputs and current local tool closure only; manifest parsing, catalog authenticity/history/non-equivocation, acquisition, store publication, lock writer/migration/replacement, fetch, atomic global inventory, project build execution, and affine same-handle consumption remain outside this slice\n'

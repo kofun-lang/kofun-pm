@@ -1214,6 +1214,7 @@ store verify >"$WORK/store.final" 2>&1 ||
 sh "$ROOT/tests/pm/lock-v2.sh"
 sh "$ROOT/tests/pm/catalog-v1.sh"
 sh "$ROOT/tests/pm/metadata-v1.sh"
+sh "$ROOT/tests/pm/lock-tool-v2.sh"
 sh "$ROOT/tests/pm/rough-graph-v2.sh"
 
 printf 'pm: an entry is named by its content, so the same bytes are one entry: PASS\n'

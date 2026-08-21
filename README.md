@@ -261,17 +261,29 @@ scripts/rough-graph-v2.sh inspect REQUIREMENTS LOCK --store ABSOLUTE_STORE
 
 The action validates one bounded canonical `kofun-pm.requirements/v2`
 snapshot, requires its exact digest in one private strict lock snapshot before
-opening store objects, and reuses the lock-v2 metadata/file integrity and
-selected-descriptor checks. It starts from every non-workspace root and member
+opening store objects, binds the lock header to the current local tool closure,
+and reuses the lock-v2 metadata/file integrity and selected-descriptor checks.
+It starts from every non-workspace root and member
 requirement, traverses exact dependency pairs while excluding declared
 workspace identities, and requires reachable pairs to equal retained metadata
 rows exactly. Selected remote packages are the semantic-version maximum
 reachable per identity. Missing and unreachable pairs are distinct; complete
 counts appear only after the whole relation passes.
 
+v0.11.0 binds that checkpoint to the exact current local lock-v2 tool closure.
+`contracts/lock-tool-v2.files` is a strict self-naming inventory of resolver,
+graph, protocol, requirements/catalog/metadata/lock parsers, store admission,
+build/authority wiring, the retained v1 reader, and the tool adapter itself.
+Every regular non-symlink input is snapshotted once under per-file and aggregate
+bounds, then framed by path, exact size, and SHA-256 with the exact clean
+`vendor/kofun` gitlink. The lock tool header must match after the requirements
+digest and before any store object is opened. Ambient Git repository, index,
+object, worktree, or config redirection is removed before the five local
+read-only Git checks.
+
 **What is not here yet:** producing a complete lock still needs manifest
 parsing, the lock v2 writer, live catalog/metadata/blob acquisition and
-authentication, tool-identity recomputation, and fetch. For a supplied
+authentication, and fetch. For a supplied
 structurally valid v2 lock, the
 inspector proves that every metadata and selected-file object directly named
 by its rows exists with the declared bytes; `audit-store` additionally proves,
@@ -297,7 +309,7 @@ bits, decompression bombs, and install hooks from the protocol. ADR 7 requires
 no-replace store publication, winner rehash, and a same-handle handoff; the
 v0.4.0 shell store now gates descriptor verification, no-replace publication,
 concurrent winner rehash, and corrupt-winner non-overwrite. Same-handle handoff,
-fetch, the lock v2 writer, manifest/tool binding, and offline build evidence
+fetch, the lock v2 writer, manifest binding, and offline build evidence
 remain, so #14 stays open. The v0.8.0 catalog checkpoint covers
 only supplied policy/catalog bytes and descriptors retained by one supplied
 lock: it does not prove that bytes came from that HTTPS origin, authenticate a
@@ -305,7 +317,8 @@ publisher, prevent equivocation, or retain a complete catalog ledger. v0.9.0
 binds one supplied metadata document to one exact catalog descriptor but does
 not acquire it or inspect the file blobs it describes. v0.10.0 proves exact
 rough-graph reachability and MVS selection only for already supplied canonical
-requirements, lock, and store snapshots.
+requirements, lock, and store snapshots. v0.11.0 additionally refuses a lock
+whose tool header does not name the exact current local implementation closure.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -431,13 +444,22 @@ rough-graph action proves workspace package equality, exact-pair reachability,
 no missing or extra retained metadata, semantic MVS maxima, and the combined
 root/member/remote edge bound before emitting complete counts.
 
+v0.11.0 adds the strict self-naming `lock-tool-v2` closure manifest and a
+bounded read-once identity adapter. The rough-graph composition now compares
+the lock tool header with the canonical file size/digest framing and exact
+clean Kofun gitlink after its requirements digest but before any store
+snapshot. Included-file and gitlink changes move the identity; unrelated files
+do not. Hostile ambient Git redirection is removed, and only the exact local
+index, HEAD, and tracked-clean reads are permitted.
+
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
 recompute the tool or requirements identity, re-resolve MVS, write a lock,
 migrate v1, fetch, prove exact lock/store set equality, or prove the affine
 same-handle consumer boundary. The v0.10.0 composition adds supplied
-requirements identity and rough-graph/MVS equality, but not manifest or
-complete tool identity. Every success text states those absences. The hostile
+requirements identity and rough-graph/MVS equality; v0.11.0 also binds the
+complete current local tool closure, but not the project manifest. Every
+success text states those absences. The hostile
 gate installs and re-signs semantic metadata mutations so framing, header
 binding, order, counts, canonical fields, selected/superseded parsing, and
 every descriptor mismatch reach the intended check beyond both outer digests.
@@ -481,9 +503,10 @@ one supplied authority/catalog pair and the continuity of descriptors actually
 retained by one supplied lock. v0.9.0 binds one supplied metadata document to
 its exact catalog size/digest before strict parsing. v0.10.0 proves one supplied
 requirements/lock/store carries exactly its reachable rough metadata graph and
-semantic MVS result. P4 still has to connect those checks to live authenticated
-acquisition, file blobs, the manifest, complete tool identity, a writer, and
-offline consumers before making the complete v2 claim.
+semantic MVS result. v0.11.0 binds that proof to the exact current local tool
+closure and clean Kofun gitlink. P4 still has to connect those checks to live
+authenticated acquisition, file blobs, the manifest, a writer, and offline
+consumers before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 
