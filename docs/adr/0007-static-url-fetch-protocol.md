@@ -477,6 +477,32 @@ bounded transport, write a lock, materialize public package paths, or provide
 the affine same-open-handle consumer boundary. It is one selected-blob edge,
 not completion of #14 or `kpm fetch`.
 
+#### Current supplied-catalog exact-version acquisition
+
+The v0.15.0 shell checkpoint removes the supplied metadata path and logical
+path from the public request. `scripts/fetch-version-v1.sh` accepts one exact
+identity/version plus the supplied authority/catalog, pinned IPv4, CA, and
+store. The one catalog plan derives the metadata descriptor and request. After
+acquisition and an independent CAS snapshot, the strict metadata parser freezes
+the complete bounded descriptor set before any blob request begins.
+
+Every descriptor is then acquired in canonical path order through a private
+shared object edge. Each object is independently snapshotted and rehashed;
+source snapshots additionally pass UTF-8 validation while data remains opaque.
+Warm objects and repeated digests reuse verified CAS entries. Child output and
+partial completion remain private, and exactly one version-level success is
+emitted only after all declared files pass. Earlier verified CAS objects may
+remain unreferenced when a later descriptor fails. No public materialization or
+lifecycle-looking source execution occurs.
+
+This still begins with a supplied catalog and a caller-selected exact version.
+It does not acquire or authenticate the catalog, select versions by MVS, follow
+dependency/workspace edges, establish the complete selected-package graph,
+implement the normative DNS/redirect/header-bounded transport, bind a manifest,
+write or migrate a lock, materialize files, prove offline build behavior, or
+provide the affine same-open-handle boundary. It advances but does not complete
+#14 or `kpm fetch`.
+
 ### 9. Store publication is verify, then create-if-absent
 
 Fetched bytes are streamed into a unique temporary on the final entry's
@@ -612,9 +638,11 @@ Issue #20/v0.12.0 supplies only the pinned single-artifact qualification above.
 Issue #21/v0.13.0 binds one supplied catalog descriptor to one derived metadata
 request and strict parse. Issue #22/v0.14.0 binds one exact descriptor in that
 supplied metadata to one derived blob acquisition, outer store snapshot, and
-source/data validation. None discharges catalog/metadata acquisition or
-provenance, the complete DNS/redirect/header transport, transitive selected-
-file graph, lock, recovery, or offline-consumer evidence in this list.
+source/data validation. Issue #23/v0.15.0 acquires the catalog-bound metadata
+and every descriptor it declares for one exact version, with one all-files
+success barrier. None discharges catalog acquisition/provenance, the complete
+DNS/redirect/header transport, transitive selected-package graph, lock,
+recovery, or offline-consumer evidence in this list.
 
 ## Current Kofun implementation boundary
 

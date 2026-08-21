@@ -122,6 +122,8 @@ write_expected_manifest() {
         printf 'scripts/fetch-artifact-v1.sh\n'
         printf 'scripts/fetch-file-v1.sh\n'
         printf 'scripts/fetch-metadata-v1.sh\n'
+        printf 'scripts/fetch-object-v1.sh\n'
+        printf 'scripts/fetch-version-v1.sh\n'
         printf 'scripts/file-request-v1-validate.awk\n'
         printf 'scripts/lock-tool-v2.sh\n'
         printf 'scripts/lock-v2-structure.sh\n'

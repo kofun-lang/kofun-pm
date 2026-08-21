@@ -9,6 +9,8 @@ scripts/fetch-artifact-v1-validate.awk
 scripts/fetch-artifact-v1.sh
 scripts/fetch-file-v1.sh
 scripts/fetch-metadata-v1.sh
+scripts/fetch-object-v1.sh
+scripts/fetch-version-v1.sh
 scripts/file-request-v1-validate.awk
 scripts/lock-tool-v2.sh
 scripts/lock-v2-structure.sh

@@ -372,6 +372,35 @@ complete DNS/redirect/header-bounded transport, graph/MVS construction, lock
 writing, and same-handle consumer handoff remain outside it, so #14 remains
 open.
 
+v0.15.0 closes the complete-file-set edge for one exact version:
+
+```
+scripts/fetch-version-v1.sh acquire IDENTITY VERSION \
+  --catalog CATALOG \
+  --authority AUTHORITY \
+  --ipv4 A.B.C.D \
+  --ca-file CA_PEM \
+  --store ABSOLUTE_STORE
+```
+
+One supplied authority/catalog plan derives and acquires the metadata; there is
+no caller-supplied metadata path, logical path, descriptor, or endpoint. The
+adapter strictly parses that retained metadata once, freezes its complete
+bounded descriptor set before the first blob request, and acquires every file
+in canonical path order. A private shared object edge withholds child success
+until each exact CAS entry has been independently snapshotted and rehashed.
+Source bytes must be valid UTF-8, data bytes remain opaque, and one version-level
+success is exposed only after all files pass. Warm and duplicate-digest objects
+reuse verified CAS entries without weakening the all-files barrier.
+
+This is one exact version, not MVS-selected dependency/workspace traversal.
+Verified unreferenced CAS objects may remain after a later failure, but no lock,
+materialization, install/build action, or partial version success is produced.
+Catalog acquisition/provenance, the complete DNS/redirect/header-bounded
+transport, graph traversal, manifest binding, the lock writer, same-handle
+consumer handoff, and the global lifecycle proof remain outside it, so #14
+remains open.
+
 **What is not here yet:** producing a complete lock still needs manifest
 parsing, the lock v2 writer, complete catalog/metadata/blob traversal and its
 complete DNS/redirect/header-bounded transport, authentication, and fetch. For a supplied
@@ -417,7 +446,10 @@ from one supplied approved catalog plan and parses the admitted object, but it
 still does not acquire the catalog or traverse dependencies and file blobs.
 v0.14.0 derives one exact blob request from one descriptor in one supplied,
 catalog-bound metadata document and revalidates source/data bytes without
-materializing or executing them; it still does not perform package traversal.
+materializing or executing them. v0.15.0 instead acquires the catalog-bound
+metadata and every descriptor it declares for one exact version, with one
+complete-file-set success barrier; it still does not select or traverse the
+dependency/package graph.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -561,7 +593,10 @@ store resnapshot, or strict parse boundary therefore also moves that identity.
 v0.14.0 adds the metadata-selected file wrapper and its closed request
 validator. Its exact-path descriptor selection, derived blob request, outer
 store snapshot, source UTF-8 check, and data opacity therefore move the same
-identity as well.
+identity as well. v0.15.0 adds the exact-version wrapper and its private shared
+object edge. Complete descriptor preflight, metadata-plus-all-file ordering,
+per-object outer snapshots, and the one version-level success barrier therefore
+move that identity too.
 
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
@@ -621,10 +656,12 @@ v0.13.0 binds one supplied catalog descriptor to one derived metadata request,
 store resnapshot, and strict parse without claiming catalog acquisition or the
 package graph. v0.14.0 binds one exact descriptor in one such supplied metadata
 document to one derived source/data blob request, store resnapshot, and source
-UTF-8 check without materialization or traversal. P4 still has to connect those
-checks to the complete header-bounded DNS/redirect transport, authenticated
-catalog/metadata acquisition, the full selected-file graph, the manifest, a
-writer, and offline consumers before making the complete v2 claim.
+UTF-8 check without materialization or traversal. v0.15.0 acquires that exact
+catalog-bound metadata and its complete bounded file set, but only for one
+caller-selected version. P4 still has to connect those checks to the complete
+header-bounded DNS/redirect transport, authenticated catalog acquisition, the
+selected dependency/package graph, the manifest, a writer, and offline
+consumers before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

@@ -183,7 +183,12 @@ if test -f "$fixture/signal"; then
     exit 143
 fi
 
+printf '%s\n' "$url" >>"$fixture/transfer.urls"
 body=$fixture/body
+url_tail=${url##*/}
+if test -f "$fixture/bodies/$url_tail"; then
+    body=$fixture/bodies/$url_tail
+fi
 test -f "$body" || : >"$body"
 body_size=$(/usr/bin/wc -c <"$body" | /usr/bin/tr -d ' ')
 curl_exit=$(read_fixture exit 0)
