@@ -397,6 +397,36 @@ verified blobs into a store because digest identity is independent of origin;
 that does not rename the package. An alias policy, if ever added, must be
 explicit and lock-recorded.
 
+#### Current pinned single-artifact qualification
+
+The v0.12.0 shell checkpoint is intentionally smaller than this transport.
+`scripts/fetch-artifact-v1.sh` accepts one already-trusted size/digest and one
+explicitly approved canonical origin, request target, pinned IPv4 address, CA
+file, and store. It privately snapshots at most 1 MiB of CA bytes, reuses an
+exact verified warm-store entry without network, or makes exactly one
+redirect-free GET with curl and linked libcurl 8.4.0 or newer, both qualified
+for HTTPS/SSL support. The curl subprocess uses the
+private CA snapshot, TLS 1.2+, the exact `--resolve` peer, no proxy/config/netrc
+or credential environment, no retry, an ongoing body limit, and fixed
+10-second connection, 30-second curl low-speed, and 10-minute request guards.
+Only final HTTPS status 200, absent or exactly one identity content encoding,
+exact peer, size, and digest reach the existing no-replace admission. The
+adapter checks the complete private header snapshot so duplicate or compound
+content-coding fields cannot hide behind curl's single-field write-out view.
+It also checks the exact digest-shard boundary before transfer; store admission
+independently refuses shard symlinks instead of publishing through them.
+
+This is transport/store qualification evidence, not protocol-v1 acquisition.
+The caller, rather than a parsed authority/catalog/metadata chain, supplies
+and approves every descriptor and endpoint input. It performs no DNS or IANA
+public-address decision, IPv6 selection, redirect resolution, catalog or
+package traversal, parsing, or lock work. curl CLI also cannot impose the
+normative 64-KiB complete-header, 256-field, 8-KiB field-line, or pre-body
+`Content-Length` bounds before its own internal parsing/allocation. Those
+properties, the exact response-idle interval, and the complete-fetch deadline
+require the complete transport helper or native #1577 and remain mandatory
+before this action can become `kpm fetch`.
+
 ### 9. Store publication is verify, then create-if-absent
 
 Fetched bytes are streamed into a unique temporary on the final entry's
@@ -527,6 +557,10 @@ five-hop and loop redirect boundaries, identity preservation across redirect,
 duplicate content under two identities, wrong/truncated bytes, interruption,
 concurrent no-replace publication, corrupt-winner recovery, v1/v2 migration,
 and a network-denied lock/verify/build after one successful fetch.
+
+Issue #20/v0.12.0 supplies only the pinned single-artifact qualification above;
+it does not discharge any of the complete acquisition, DNS/redirect/header,
+graph, lock, recovery, or offline-consumer evidence in this list.
 
 ## Current Kofun implementation boundary
 

@@ -281,9 +281,44 @@ digest and before any store object is opened. Ambient Git repository, index,
 object, worktree, or config redirection is removed before the five local
 read-only Git checks.
 
+v0.12.0 adds one deliberately internal transport/store qualification:
+
+```
+scripts/fetch-artifact-v1.sh \
+  --class metadata|blob \
+  --origin https://HOST \
+  --target /absolute/request/path \
+  --ipv4 A.B.C.D \
+  --ca-file CA_PEM \
+  --size BYTES \
+  --digest SHA256 \
+  --store ABSOLUTE_STORE
+```
+
+It accepts one descriptor and one explicitly approved
+origin/target/pinned-IPv4 tuple, snapshots one bounded CA input, and either
+rehashes an exact warm-store object without network or makes one hermetic
+redirect-free HTTPS GET. Only a status-200, absent/identity-encoded response
+from the exact peer reaches size, SHA-256, and the existing no-replace store
+admission. Duplicate or compound `Content-Encoding` fields are refused. curl is
+frozen before the request; both the tool and linked libcurl must be at least
+8.4.0 with HTTPS/SSL support, and it runs
+without ambient proxy, configuration, credential, CA, key-log, HSTS, or
+alt-svc authority. The exact digest shard is checked before transfer, and the
+store primitive itself now refuses a non-directory or symlink shard rather
+than following it outside the explicit store namespace.
+
+This command is a qualification, not package fetch. The caller already trusts
+the descriptor and explicitly approves the tuple. It performs no authority
+file or catalog binding, DNS/public-address policy, redirect, metadata parsing,
+graph traversal, or lock work. In particular, curl CLI cannot impose ADR 7's
+exact 64-KiB/256-field/8-KiB-line header bounds or its pre-body
+`Content-Length` check, so v0.12.0 does not claim the general ADR transport or
+complete #14's live-acquisition acceptance.
+
 **What is not here yet:** producing a complete lock still needs manifest
-parsing, the lock v2 writer, live catalog/metadata/blob acquisition and
-authentication, and fetch. For a supplied
+parsing, the lock v2 writer, live catalog/metadata/blob acquisition and its
+complete DNS/redirect/header-bounded transport, authentication, and fetch. For a supplied
 structurally valid v2 lock, the
 inspector proves that every metadata and selected-file object directly named
 by its rows exists with the declared bytes; `audit-store` additionally proves,
@@ -319,6 +354,9 @@ not acquire it or inspect the file blobs it describes. v0.10.0 proves exact
 rough-graph reachability and MVS selection only for already supplied canonical
 requirements, lock, and store snapshots. v0.11.0 additionally refuses a lock
 whose tool header does not name the exact current local implementation closure.
+v0.12.0 qualifies only one already-described response against an explicitly
+pinned endpoint and verified no-replace store admission; it does not derive or
+traverse a package protocol input.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -452,6 +490,11 @@ snapshot. Included-file and gitlink changes move the identity; unrelated files
 do not. Hostile ambient Git redirection is removed, and only the exact local
 index, HEAD, and tracked-clean reads are permitted.
 
+v0.12.0 adds the pinned single-artifact validator and adapter to that same
+tool closure. Changing its scalar grammar, hermetic curl profile, response
+checks, or success-only store admission therefore moves the tool identity even
+though the qualification remains outside the public package-fetch boundary.
+
 The two lower-level store actions intentionally do **not** prove catalog
 authenticity/history, dependency reachability or the complete rough graph,
 recompute the tool or requirements identity, re-resolve MVS, write a lock,
@@ -504,9 +547,11 @@ retained by one supplied lock. v0.9.0 binds one supplied metadata document to
 its exact catalog size/digest before strict parsing. v0.10.0 proves one supplied
 requirements/lock/store carries exactly its reachable rough metadata graph and
 semantic MVS result. v0.11.0 binds that proof to the exact current local tool
-closure and clean Kofun gitlink. P4 still has to connect those checks to live
-authenticated acquisition, file blobs, the manifest, a writer, and offline
-consumers before making the complete v2 claim.
+closure and clean Kofun gitlink. v0.12.0 adds a pinned descriptor-known HTTPS
+response/store qualification without claiming catalog or package acquisition.
+P4 still has to connect those checks to the complete header-bounded
+DNS/redirect transport, authenticated acquisition, file blobs, the manifest, a
+writer, and offline consumers before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

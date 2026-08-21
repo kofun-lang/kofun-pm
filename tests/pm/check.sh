@@ -851,6 +851,48 @@ printf 'package beta\n' >"$WORK/src/b"
 # store, so this must not become a second entry.
 printf 'package alpha\n' >"$WORK/src/a-renamed"
 
+control_store="$WORK/control-store
+"
+if sh "$store_tool" --store "$control_store" add "$WORK/src/a" \
+    >"$WORK/store.control-path" 2>&1
+then
+    fail 'the store accepted a control byte in its explicit authority path'
+fi
+grep -Fq -- '--store path contains a control byte' "$WORK/store.control-path" ||
+    fail 'the control-byte store path was not refused by name'
+test ! -e "$control_store" && test ! -L "$control_store" ||
+    fail 'the control-byte store path mutated its exact refused pathname'
+test ! -e "$WORK/control-store" ||
+    fail 'the control-byte store path mutated its stripped sibling'
+
+store_cr=$(printf '\r')
+control_store_cr=$WORK/control-store-cr$store_cr
+if sh "$store_tool" --store "$control_store_cr" add "$WORK/src/a" \
+    >"$WORK/store.control-cr" 2>&1
+then
+    fail 'the store accepted CR in its explicit authority path'
+fi
+grep -Fq -- '--store path contains a control byte' "$WORK/store.control-cr" ||
+    fail 'the CR store path was not refused by name'
+test ! -e "$control_store_cr" && test ! -L "$control_store_cr" ||
+    fail 'the CR store path mutated its exact refused pathname'
+test ! -e "$WORK/control-store-cr" ||
+    fail 'the CR store path mutated its control-stripped sibling'
+
+store_tab=$(printf '\t')
+control_store_tab=$WORK/control-store-tab$store_tab
+if sh "$store_tool" --store "$control_store_tab" add "$WORK/src/a" \
+    >"$WORK/store.control-tab" 2>&1
+then
+    fail 'the store accepted tab in its explicit authority path'
+fi
+grep -Fq -- '--store path contains a control byte' "$WORK/store.control-tab" ||
+    fail 'the tab store path was not refused by name'
+test ! -e "$control_store_tab" && test ! -L "$control_store_tab" ||
+    fail 'the tab store path mutated its exact refused pathname'
+test ! -e "$WORK/control-store-tab" ||
+    fail 'the tab store path mutated its control-stripped sibling'
+
 digest_a=$(env -i PATH="$PATH" sh "$store_tool" --store "$STORE" \
     add "$WORK/src/a" 2>"$WORK/store.add-a") ||
     fail 'the store could not accept a file'
@@ -901,6 +943,32 @@ test ! -e "$(store_entry_for "$zero_digest")" ||
     fail 'wrong-digest admission made a trusted final entry visible'
 test "$(find "$STORE" -type f -name '*.incoming.*' | wc -l | tr -d ' ')" -eq 0 ||
     fail 'a refused admission left an untrusted temporary behind'
+
+# A digest shard is part of the explicit store namespace, never an authority
+# to follow a symlink and publish outside that boundary.
+printf 'package shard boundary\n' >"$WORK/src/shard-boundary"
+shard_digest=$(file_digest "$WORK/src/shard-boundary")
+shard_bytes=$(wc -c <"$WORK/src/shard-boundary" | tr -d ' ')
+shard_path=$STORE/$(printf '%s' "$shard_digest" | cut -c1-2)
+while test -e "$shard_path" || test -L "$shard_path"; do
+    printf 'x\n' >>"$WORK/src/shard-boundary"
+    shard_digest=$(file_digest "$WORK/src/shard-boundary")
+    shard_bytes=$(wc -c <"$WORK/src/shard-boundary" | tr -d ' ')
+    shard_path=$STORE/$(printf '%s' "$shard_digest" | cut -c1-2)
+done
+shard_outside=$WORK/store-shard-outside
+mkdir "$shard_outside"
+ln -s "$shard_outside" "$shard_path"
+if store admit "$shard_digest" "$shard_bytes" "$WORK/src/shard-boundary" \
+    >"$WORK/store.shard-symlink" 2>&1
+then
+    fail 'store admission followed a digest-shard symlink outside its boundary'
+fi
+grep -Fq 'digest shard is not a real directory' "$WORK/store.shard-symlink" ||
+    fail 'digest-shard symlink refusal was not named'
+test "$(find "$shard_outside" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ||
+    fail 'digest-shard symlink admission created an outside file'
+rm -f "$shard_path"
 
 # TERM during a real bounded copy must never expose a final name. The trap
 # removes the partial candidate; the later manual-leftover case separately
@@ -1214,6 +1282,7 @@ store verify >"$WORK/store.final" 2>&1 ||
 sh "$ROOT/tests/pm/lock-v2.sh"
 sh "$ROOT/tests/pm/catalog-v1.sh"
 sh "$ROOT/tests/pm/metadata-v1.sh"
+sh "$ROOT/tests/pm/fetch-artifact-v1.sh"
 sh "$ROOT/tests/pm/lock-tool-v2.sh"
 sh "$ROOT/tests/pm/rough-graph-v2.sh"
 

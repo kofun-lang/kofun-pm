@@ -43,6 +43,9 @@ test "${1:-}" = --store ||
     fail 'usage: scripts/store.sh --store ABSOLUTE_STORE COMMAND ...'
 STORE=${2:-}
 test -n "$STORE" || fail '--store requires an absolute path'
+KPM_STORE_PATH=$STORE LC_ALL=C awk '
+    BEGIN { exit ENVIRON["KPM_STORE_PATH"] ~ /[[:cntrl:]]/ ? 1 : 0 }
+' /dev/null || fail '--store path contains a control byte'
 case $STORE in
     /*) ;;
     *) fail "--store must be an absolute path: $STORE" ;;
@@ -100,6 +103,43 @@ path_of() {
         "$(printf '%s' "$1" | cut -c3-)"
 }
 
+shard_of() {
+    printf '%s/%s\n' "$STORE" "$(printf '%s' "$1" | cut -c1-2)"
+}
+
+prepare_shard() {
+    prepared_digest=$1
+    if test -L "$STORE" || { test -e "$STORE" && ! test -d "$STORE"; }; then
+        fail "store namespace is not a real directory: $STORE"
+    fi
+    if ! test -d "$STORE"; then
+        mkdir -p "$STORE" || fail "could not create store directory: $STORE"
+    fi
+    test ! -L "$STORE" && test -d "$STORE" ||
+        fail "store namespace is not a real directory: $STORE"
+
+    prepared_shard=$(shard_of "$prepared_digest")
+    if test -L "$prepared_shard" ||
+        { test -e "$prepared_shard" && ! test -d "$prepared_shard"; }
+    then
+        fail "digest shard is not a real directory: $prepared_shard"
+    fi
+    if ! test -d "$prepared_shard"; then
+        if ! mkdir "$prepared_shard" 2>/dev/null; then
+            test ! -L "$prepared_shard" && test -d "$prepared_shard" ||
+                fail "could not create real digest shard: $prepared_shard"
+        fi
+    fi
+    test ! -L "$prepared_shard" && test -d "$prepared_shard" ||
+        fail "digest shard is not a real directory: $prepared_shard"
+}
+
+require_shard() {
+    required_shard=$(shard_of "$1")
+    test ! -L "$required_shard" && test -d "$required_shard" ||
+        fail "digest shard is not a real directory: $required_shard"
+}
+
 is_size() {
     case $1 in
         *[!0-9]* | '') return 1 ;;
@@ -136,6 +176,7 @@ check_entry_shape_and_size() {
     entry=$2
     expected_entry_size=${3:-}
 
+    require_shard "$expected"
     if test -L "$entry" || ! test -f "$entry"; then
         fail "entry is not a regular file: $entry
   expected $expected
@@ -197,8 +238,8 @@ copy_candidate() {
         fail "input size does not match its descriptor
   expected $expected_size
   actual   $input_size"
+    prepare_shard "$expected"
     candidate_target=$(path_of "$expected")
-    mkdir -p "$(dirname -- "$candidate_target")"
     tmp=$(mktemp "$candidate_target.incoming.XXXXXX") ||
         fail "could not create a unique temporary beside $candidate_target"
     # Do not write beyond an untrusted declared bound. The shell adapter is a
@@ -232,8 +273,8 @@ publish_candidate() {
   expected $expected
   actual   $actual"
 
+    prepare_shard "$expected"
     target=$(path_of "$expected")
-    mkdir -p "$(dirname -- "$target")"
     chmod 444 "$tmp"
 
     if test -e "$target" || test -L "$target"; then

@@ -118,6 +118,8 @@ write_expected_manifest() {
         printf 'scripts/catalog-v1-plan.sh\n'
         printf 'scripts/catalog-v1-validate.awk\n'
         printf 'scripts/catalog-v1.sh\n'
+        printf 'scripts/fetch-artifact-v1-validate.awk\n'
+        printf 'scripts/fetch-artifact-v1.sh\n'
         printf 'scripts/lock-tool-v2.sh\n'
         printf 'scripts/lock-v2-structure.sh\n'
         printf 'scripts/lock-v2-validate.awk\n'

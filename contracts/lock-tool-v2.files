@@ -5,6 +5,8 @@ scripts/build-seed.sh
 scripts/catalog-v1-plan.sh
 scripts/catalog-v1-validate.awk
 scripts/catalog-v1.sh
+scripts/fetch-artifact-v1-validate.awk
+scripts/fetch-artifact-v1.sh
 scripts/lock-tool-v2.sh
 scripts/lock-v2-structure.sh
 scripts/lock-v2-validate.awk
