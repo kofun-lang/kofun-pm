@@ -110,4 +110,6 @@ test "$body_rows" -le "$MAX_BODY_ROWS" ||
     fail "lock body exceeds the $MAX_BODY_ROWS-row structural bound: $body_rows"
 LC_ALL=C awk -f "$PROTOCOL_VALIDATOR" -f "$VALIDATOR" "$work/body" \
     >"$work/objects" || fail 'the lock-v2 envelope is invalid'
+printf 'lock\t-\t-\t-\t%s\t%s\t%s\tenvelope\n' \
+    "$tool" "$requirements" "$recorded"
 cat "$work/objects"

@@ -252,17 +252,35 @@ path, kind, and scalar parsing begins. Size and digest failures therefore
 cannot be disguised as grammar failures. This still consumes supplied bytes;
 it neither fetches nor authenticates them.
 
-**What is not here yet:** a *complete* lock that enumerates every required
-rough-graph input still needs the lock v2 writer, live catalog/metadata/blob
-acquisition and authentication, graph binding, and fetch. For a supplied
+v0.10.0 closes the supplied rough-graph relation for one requirements/lock/store
+snapshot:
+
+```
+scripts/rough-graph-v2.sh inspect REQUIREMENTS LOCK --store ABSOLUTE_STORE
+```
+
+The action validates one bounded canonical `kofun-pm.requirements/v2`
+snapshot, requires its exact digest in one private strict lock snapshot before
+opening store objects, and reuses the lock-v2 metadata/file integrity and
+selected-descriptor checks. It starts from every non-workspace root and member
+requirement, traverses exact dependency pairs while excluding declared
+workspace identities, and requires reachable pairs to equal retained metadata
+rows exactly. Selected remote packages are the semantic-version maximum
+reachable per identity. Missing and unreachable pairs are distinct; complete
+counts appear only after the whole relation passes.
+
+**What is not here yet:** producing a complete lock still needs manifest
+parsing, the lock v2 writer, live catalog/metadata/blob acquisition and
+authentication, tool-identity recomputation, and fetch. For a supplied
 structurally valid v2 lock, the
 inspector proves that every metadata and selected-file object directly named
 by its rows exists with the declared bytes; `audit-store` additionally proves,
 in a later sequential pass, that every enumerated store entry hashes to its
-name. Neither proves that the rough graph omitted no row, exact lock/store set
-equality, a bounded or atomic global snapshot, or the affine handoff of the
-same open file description. This is not a claim that the complete store/fetch
-boundary is finished.
+name. The v0.10.0 action additionally proves that its supplied requirements
+omit no reachable metadata row and admit no unreachable one. It still does not
+prove exact lock/store set equality, a bounded or atomic global snapshot,
+manifest binding, or the affine handoff of the same open file description.
+This is not a claim that the complete store/fetch boundary is finished.
 
 ### 5. Fetch is explicit; everything after it is offline
 
@@ -279,13 +297,15 @@ bits, decompression bombs, and install hooks from the protocol. ADR 7 requires
 no-replace store publication, winner rehash, and a same-handle handoff; the
 v0.4.0 shell store now gates descriptor verification, no-replace publication,
 concurrent winner rehash, and corrupt-winner non-overwrite. Same-handle handoff,
-fetch, the lock v2 writer, dependency-closure/re-resolution binding, and offline
-build evidence remain, so #14 stays open. The v0.8.0 catalog checkpoint covers
+fetch, the lock v2 writer, manifest/tool binding, and offline build evidence
+remain, so #14 stays open. The v0.8.0 catalog checkpoint covers
 only supplied policy/catalog bytes and descriptors retained by one supplied
 lock: it does not prove that bytes came from that HTTPS origin, authenticate a
 publisher, prevent equivocation, or retain a complete catalog ledger. v0.9.0
 binds one supplied metadata document to one exact catalog descriptor but does
-not acquire it or inspect the file blobs it describes.
+not acquire it or inspect the file blobs it describes. v0.10.0 proves exact
+rough-graph reachability and MVS selection only for already supplied canonical
+requirements, lock, and store snapshots.
 
 **The cost:** protocol v1 is narrow — release semver only, ASCII paths, source
 and data files only, and explicit size/count bounds. Supporting bundles,
@@ -404,14 +424,23 @@ It reports complete dependency/file descriptor counts only after parsing the
 whole document and never opens a metadata path for an unapproved origin,
 malformed catalog, or absent exact version.
 
-The two store actions intentionally do **not** prove catalog authenticity/history,
-dependency reachability or the complete rough graph, recompute the tool or
-requirements identity, re-resolve MVS, write a lock, migrate v1, fetch, prove
-exact lock/store set equality, or prove the affine same-handle consumer
-boundary. Their success text states those absences. The hostile gate installs
-and re-signs semantic metadata mutations so framing, header binding, order,
-counts, canonical fields, selected/superseded parsing, and every descriptor
-mismatch reach the intended check beyond both outer digests.
+v0.10.0 adds a strict bounded requirements-v2 plan and extends the shared
+lock-v2 path to retain its requirements header, package rows, and every parsed
+metadata dependency without reopening the lock or store objects. The
+rough-graph action proves workspace package equality, exact-pair reachability,
+no missing or extra retained metadata, semantic MVS maxima, and the combined
+root/member/remote edge bound before emitting complete counts.
+
+The two lower-level store actions intentionally do **not** prove catalog
+authenticity/history, dependency reachability or the complete rough graph,
+recompute the tool or requirements identity, re-resolve MVS, write a lock,
+migrate v1, fetch, prove exact lock/store set equality, or prove the affine
+same-handle consumer boundary. The v0.10.0 composition adds supplied
+requirements identity and rough-graph/MVS equality, but not manifest or
+complete tool identity. Every success text states those absences. The hostile
+gate installs and re-signs semantic metadata mutations so framing, header
+binding, order, counts, canonical fields, selected/superseded parsing, and
+every descriptor mismatch reach the intended check beyond both outer digests.
 
 For the released v1 verifier, that buys four failures where other tools have
 one, and "the lock is wrong"
@@ -450,10 +479,11 @@ snapshot. v0.7.0 composes that with a subsequent reverse scan of the explicit
 store, while allowing valid unreferenced objects. v0.8.0 separately validates
 one supplied authority/catalog pair and the continuity of descriptors actually
 retained by one supplied lock. v0.9.0 binds one supplied metadata document to
-its exact catalog size/digest before strict parsing. P4 still has to connect
-those checks to live authenticated acquisition, file blobs, a complete rough
-graph, the manifest, a writer, and offline re-resolution before making the
-complete v2 claim.
+its exact catalog size/digest before strict parsing. v0.10.0 proves one supplied
+requirements/lock/store carries exactly its reachable rough metadata graph and
+semantic MVS result. P4 still has to connect those checks to live authenticated
+acquisition, file blobs, the manifest, complete tool identity, a writer, and
+offline consumers before making the complete v2 claim.
 
 **The cost:** a lock is bigger and more boring to read. Both are fine.
 

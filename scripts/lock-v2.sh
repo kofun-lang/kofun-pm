@@ -6,13 +6,17 @@ set -eu
 #
 #   scripts/lock-v2.sh inspect LOCK --store /abs/path
 #   scripts/lock-v2.sh audit-store LOCK --store /abs/path
+#   scripts/lock-v2.sh graph-plan LOCK --store /abs/path \
+#     --requirements-digest DIGEST
 #
 # Neither action is named plain `verify`: catalog/history binding, dependency
 # reachability and re-resolution, tool/requirements identity, and the v2
 # writer/migration/fetch path are later slices. `audit-store` is sequential,
 # not an atomic snapshot or same-open-file-description handoff. A partial
 # verifier must say which boundary it proves instead of returning success
-# under the complete command name.
+# under the complete command name. `graph-plan` is an internal composition
+# adapter: it withholds machine rows until the full lock-scoped inspection
+# passes and is consumed only by rough-graph-v2.sh.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STORE_TOOL=$ROOT/scripts/store.sh
@@ -31,11 +35,24 @@ fail() {
 
 ACTION=${1:-}
 case $ACTION in
-    inspect | audit-store) ;;
+    inspect | audit-store)
+        test "$#" -eq 4 && test "${3:-}" = --store ||
+            fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE'
+        EXPECTED_REQUIREMENTS=
+        ;;
+    graph-plan)
+        test "$#" -eq 6 && test "${3:-}" = --store &&
+            test "${5:-}" = --requirements-digest ||
+            fail 'usage: scripts/lock-v2.sh graph-plan LOCK --store ABSOLUTE_STORE --requirements-digest DIGEST'
+        EXPECTED_REQUIREMENTS=${6:-}
+        case $EXPECTED_REQUIREMENTS in
+            *[!0-9a-f]* | '') fail 'graph-plan requirements digest is not one lowercase sha256 digest' ;;
+        esac
+        test "${#EXPECTED_REQUIREMENTS}" -eq 64 ||
+            fail 'graph-plan requirements digest is not one lowercase sha256 digest'
+        ;;
     *) fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE' ;;
 esac
-test "$#" -eq 4 && test "${3:-}" = --store ||
-    fail 'usage: scripts/lock-v2.sh {inspect|audit-store} LOCK --store ABSOLUTE_STORE'
 INPUT_LOCK=$2
 STORE=${4:-}
 test -n "$STORE" || fail '--store requires an explicit path'
@@ -66,6 +83,15 @@ trap 'rm -rf "$work"' 0 1 2 15
 sh "$STRUCTURE_TOOL" inspect "$INPUT_LOCK" >"$work/objects"
 
 tab=$(printf '\t')
+if test "$ACTION" = graph-plan; then
+    lock_requirements=$(LC_ALL=C awk -F "$tab" '$1 == "lock" { print $6 }' \
+        "$work/objects")
+    test -n "$lock_requirements" || fail 'lock plan did not retain its requirements digest'
+    test "$lock_requirements" = "$EXPECTED_REQUIREMENTS" ||
+        fail "lock requirements digest does not match the supplied requirements bytes
+  expected $lock_requirements
+  actual   $EXPECTED_REQUIREMENTS"
+fi
 objects=0
 metadata_objects=0
 file_objects=0
@@ -73,12 +99,23 @@ metadata_dependency_edges=0
 metadata_file_descriptors=0
 : >"$work/lock-files"
 : >"$work/metadata-files"
+: >"$work/graph-plan"
 
 # Pass one parses every metadata snapshot, including superseded versions, and
 # builds both sides of the selected descriptor relation. No snapshot or
 # validation is initiated from a file row until that relation is proven.
 while IFS="$tab" read -r object identity version path kind size digest selection; do
     test -n "$object" || continue
+    case $object in
+        lock | package)
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$object" "$identity" "$version" "$path" "$kind" "$size" \
+                "$digest" "$selection" >>"$work/graph-plan"
+            continue
+            ;;
+        metadata | file) ;;
+        *) fail "lock structure plan returned an unknown row: $object" ;;
+    esac
     objects=$((objects + 1))
     if test "$object" != metadata; then
         file_objects=$((file_objects + 1))
@@ -89,6 +126,9 @@ while IFS="$tab" read -r object identity version path kind size digest selection
     fi
 
     metadata_objects=$((metadata_objects + 1))
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$object" "$identity" "$version" "$path" "$kind" "$size" \
+        "$digest" "$selection" >>"$work/graph-plan"
     entry=$work/metadata.$metadata_objects
     if ! sh "$STORE_TOOL" --store "$STORE" snapshot \
         "$digest" "$size" "$entry" >"$work/store-output" 2>"$work/store-error"
@@ -163,6 +203,12 @@ while IFS="$tab" read -r object identity version path kind size digest selection
   version  $version
   actual   $metadata_file_descriptors"
 
+    LC_ALL=C awk -F '\t' -v OFS='\t' '
+        $1 == "dependency" {
+            print "dependency", $2, $3, $4, $5, "-", "-", "edge"
+        }
+    ' "$work/metadata-plan.$metadata_objects" >>"$work/graph-plan"
+
     if test "$selection" = selected; then
         LC_ALL=C awk -F '\t' '$1 == "file" { print }' \
             "$work/metadata-plan.$metadata_objects" >>"$work/metadata-files"
@@ -211,6 +257,12 @@ while IFS="$tab" read -r object identity version path kind size digest selection
   path     $path"
     fi
 done <"$work/objects"
+if test "$ACTION" = graph-plan; then
+    LC_ALL=C awk -F "$tab" '$1 == "file" { print }' "$work/objects" \
+        >>"$work/graph-plan"
+    cat "$work/graph-plan"
+    exit 0
+fi
 if test "$ACTION" = inspect; then
     printf 'lock-v2: inspected canonical envelope and strict metadata; selected metadata descriptors exactly matched lock file rows; %s metadata and %s file reference(s) matched private store snapshots\n' \
         "$metadata_objects" "$file_objects"

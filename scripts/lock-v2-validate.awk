@@ -50,6 +50,7 @@ $1 == "package" {
     }
     package_state[id] = state
     package_version[id] = release
+    print "package", id, release, "-", "-", "-", "-", state
     next
 }
 

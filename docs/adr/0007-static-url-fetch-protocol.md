@@ -276,9 +276,30 @@ member-requirement\t<workspace-identity>\t<identity>\t<minimum-version>
 
 The header occurs once. Zero or more root rows follow sorted by required
 identity, then one member row per declared workspace identity sorted by member
-identity, then member-requirement rows sorted by member identity, required
-identity, and minimum version. Rows use the canonical identity and version
-forms above, duplicates are refused, and the framing ends with exactly one LF.
+identity, then member-requirement rows sorted by member identity and required
+identity. Rows use the canonical identity and version
+forms above, and the framing ends with exactly one LF. Root identity keys,
+member identity keys, and `(member identity, required identity)` keys are each
+unique; their minimum version is the value rather than part of a duplicate
+key. Different root/member/remote sources may still impose different minima on
+the same required identity, and every such edge counts before exact-pair
+reachability deduplicates it.
+
+The requirements document is at most 67 MiB (70,254,592 bytes), 17,409 rows
+including its header, and 8,192 bytes per line. Those rounded structural
+ceilings contain the maximum 1,024 members and 16,384 root/member edge rows at
+the canonical identity/version scalar maxima below; the semantic collection
+limits remain authoritative.
+
+A supplied offline graph checkpoint validates in this order: requirements
+framing/grammar/bounds; lock framing/self-digest/complete row grammar; exact
+requirements digest; every retained metadata snapshot and selected-file
+relation; workspace package equality; missing reachable exact pairs;
+unreachable retained pairs; and selected package/max-version equality. It
+emits no graph plan or counts until all stages pass. Success counts root and
+member rows, distinct reachable non-workspace `(identity, version)` pairs,
+selected non-workspace identities, and every root/member/remote dependency
+edge row before reachability deduplication.
 Workspace paths and the network authority file are not included: neither is a
 resolution input or lock identity. Member identities and requirements are.
 
@@ -402,6 +423,9 @@ Protocol v1 fixes these maxima before allocation or parsing:
 | all file blobs in one package version | 512 MiB |
 | root requirements | 1,024 |
 | declared workspace members | 1,024 |
+| requirements file bytes | 67 MiB |
+| requirements rows including header | 17,409 |
+| requirements line bytes | 8,192 |
 | package identities in one closure, including workspace | 1,024 |
 | distinct identity/version pairs in one rough graph | 16,384 |
 | root, member, and remote dependency edges in one closure | 16,384 |
@@ -418,9 +442,12 @@ Protocol v1 fixes these maxima before allocation or parsing:
 `Content-Length`, when present, is checked first, but the streaming limit is
 authoritative because a response can omit or lie about that header. Size is
 checked before digest to reject truncation and overrun by name. A repeated
-identity, version, metadata document, or file counts against the totals before
-deduplication, so an attacker cannot spend unbounded work by repeating one
-small object.
+input row, dependency edge, HTTP acquisition, metadata response, or file
+response counts against its work total before content or queue deduplication,
+so an attacker cannot spend unbounded work by repeating one small object. The
+distinct rough-graph pair limit still counts the exact visited `(identity,
+version)` set once; every queue occurrence that led to that set is separately
+charged to the 16,384 edge limit.
 The 65,536 file-descriptor closure limit counts descriptors in every parsed
 selected and superseded metadata document, even though only selected-version
 file blobs are acquired. The 16,384 edge limit includes remote dependency rows
